@@ -168,13 +168,25 @@ def detect_osteo_xps(
                 combined_no_images = abs_path
 
     # ── Pass 2: per-scan individual files ────────────────────────────────────
+    # Prefer image-bearing XPS over text-only for each label slot.
+    per_scan_has_imgs: dict[str, bool] = {}
     for xps_path in candidates:
         label = _classify_xps(str(xps_path))
         abs_path = str(xps_path.resolve())
         mtime_str = datetime.fromtimestamp(xps_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M')
-        if label in XPS_LABELS and label not in per_scan:
+        if label not in XPS_LABELS:
+            continue
+        has_imgs = _has_scan_images(abs_path)
+        if label not in per_scan:
             per_scan[label] = abs_path
-            log.info("  %s → %s  (modified %s)", xps_path.name, label, mtime_str)
+            per_scan_has_imgs[label] = has_imgs
+            log.info("  %s → %s%s  (modified %s)", xps_path.name, label,
+                     " [+images]" if has_imgs else "", mtime_str)
+        elif has_imgs and not per_scan_has_imgs.get(label):
+            # Upgrade: existing slot is text-only; this one has images — prefer it
+            log.info("  %s → %s [upgraded, has images]  (modified %s)", xps_path.name, label, mtime_str)
+            per_scan[label] = abs_path
+            per_scan_has_imgs[label] = True
 
     if per_scan:
         return per_scan
