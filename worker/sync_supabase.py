@@ -282,7 +282,9 @@ def upload_osteo_raw(
         log.info("Upserted bmd_patients: %s", patient_uuid)
 
         # ── bmd_scans ────────────────────────────────────────────────────────
-        raw_data = _json.loads(raw_json.decode())
+        # raw_json bytes are already JSON-encoded; decode to string for TEXT column.
+        # Do NOT re-parse+re-dump — that can double-encode if raw_json is a string.
+        raw_json_str = raw_json.decode()
         scan_date_raw = session_data.get('scan_date', '')
         # Convert datetime to string if needed
         if hasattr(scan_date_raw, 'strftime'):
@@ -299,8 +301,8 @@ def upload_osteo_raw(
             'software':       session_data.get('software') or config.SOFTWARE,
             'xps_filename':   session_data.get('ntx_filename') or None,
             'scan_type':      'osteo',
-            'image_paths':    image_paths,          # dict → stored as JSONB object
-            'raw_json':       _json.dumps(raw_data), # TEXT column → JSON string
+            'image_paths':    image_paths,            # dict → stored as JSONB object
+            'raw_json':       raw_json_str,           # TEXT column — already JSON string
         }
         res = (
             sb.table('bmd_scans')
