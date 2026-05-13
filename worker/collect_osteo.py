@@ -410,9 +410,13 @@ def upload_osteo_scan(mrn: str,
         session_data = raw_data['session'],
     )
 
+    puuid = result.get('patient_uuid')
+    suuid = result.get('scan_uuid')
+    db_ok = bool(puuid and suuid)
     notify(
         f"✓ Done — {len(xps_bytes)} XPS + {len(images)} PNG(s) uploaded.\n"
-        f"  Storage prefix: {result.get('storage_prefix')}"
+        f"  Storage: {result.get('storage_prefix')}\n"
+        f"  DB: {'patient=' + puuid[:8] + '… scan=' + suuid[:8] + '…' if db_ok else 'WARNING — DB rows not confirmed'}"
     )
     return result
 
