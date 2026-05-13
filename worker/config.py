@@ -21,7 +21,7 @@ OUTPUT_PDF_DIR  = os.getenv("OUTPUT_PDF_DIR", r"C:\SDRC\Reports")
 
 # ── Supabase ───────────────────────────────────────────────────────────────
 SUPABASE_URL    = os.getenv("SUPABASE_URL",     "https://supabase.sdrc.in")
-SUPABASE_KEY    = os.getenv("SUPABASE_KEY",     "your-service-role-key")
+SUPABASE_KEY    = os.getenv("SUPABASE_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "your-service-role-key")
 
 # ── Clinic identity (printed on every report) ─────────────────────────────
 CLINIC_NAME     = "SDRC Diagnostics"
