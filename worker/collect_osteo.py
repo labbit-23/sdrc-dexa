@@ -202,19 +202,23 @@ def xps_status(
     """
     found   = detect_osteo_xps(xps_dir, scan_date, mrn=mrn)
     missing = [lbl for lbl in XPS_LABELS if lbl not in found]
-    ready   = len(missing) == 0
+    # Ready as long as at least one XPS is found — some patients only have
+    # a spine scan (no hip order), so we must not block on missing femur files.
+    ready   = len(found) > 0
 
-    if ready:
-        msg = "All 3 XPS files found. Ready to upload."
-    else:
-        human = {'spine': 'Spine', 'left_femur': 'Left Femur', 'right_femur': 'Right Femur'}
-        names = ', '.join(human[m] for m in missing)
+    human = {'spine': 'Spine', 'left_femur': 'Left Femur', 'right_femur': 'Right Femur'}
+    if not found:
         msg = (
-            f"Missing: {names}.\n\n"
+            "No XPS files found for this patient.\n\n"
             "In GE Lunar: open the scan → File → Save As → XPS Document\n"
             f"Save to:  {xps_dir or config.XPS_WATCH_DIR}\n\n"
             "Then click ⟳ Refresh."
         )
+    elif missing:
+        names = ', '.join(human[m] for m in missing)
+        msg = f"Found: {', '.join(human[f] for f in found)}. Not found: {names} (may not have been ordered — OK to proceed)."
+    else:
+        msg = "All XPS files found. Ready to upload."
 
     return {
         'found':     found,
