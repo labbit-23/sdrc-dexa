@@ -283,7 +283,12 @@ def upload_osteo_raw(
 
         # ── bmd_scans ────────────────────────────────────────────────────────
         raw_data = _json.loads(raw_json.decode())
-        scan_date_str = session_data.get('scan_date', '')
+        scan_date_raw = session_data.get('scan_date', '')
+        # Convert datetime to string if needed
+        if hasattr(scan_date_raw, 'strftime'):
+            scan_date_str = scan_date_raw.strftime('%Y-%m-%dT%H:%M:%S')
+        else:
+            scan_date_str = str(scan_date_raw)
         # scan_handle: use pat_handle + scan_date as a stable key
         scan_handle = f"{patient_data.get('pat_handle', mrn)}_{scan_date_str[:10]}"
         scan_row = {
