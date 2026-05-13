@@ -25,7 +25,8 @@ from typing import Optional
 
 import config
 from collect_osteo import (
-    get_latest_patient, xps_status, upload_osteo_scan, clear_xps_watch_folder,
+    get_latest_patient, get_patient_by_mrn, xps_status,
+    upload_osteo_scan, clear_xps_watch_folder,
     get_sessions_for_mrn,
 )
 
@@ -94,7 +95,7 @@ class OsteoCollectorApp(tk.Tk):
         pat_frame = tk.Frame(self, bg=PANEL, padx=16, pady=12)
         pat_frame.pack(fill='x', padx=0, pady=(0, 0))
 
-        tk.Label(pat_frame, text='MOST RECENT PATIENT',
+        tk.Label(pat_frame, text='PATIENT',
                  bg=PANEL, fg=MGRAY, font=FONT_SMALL).grid(row=0, column=0, sticky='w')
 
         self._name_var = tk.StringVar(value='Loading…')
@@ -107,14 +108,29 @@ class OsteoCollectorApp(tk.Tk):
                  bg=PANEL, fg=LGRAY, font=FONT_SMALL).grid(
             row=2, column=0, sticky='w')
 
-        # Refresh button
-        self._refresh_btn = tk.Button(
-            pat_frame, text='⟳  Refresh',
+        # MRN entry + Load button (row 3)
+        mrn_row = tk.Frame(pat_frame, bg=PANEL)
+        mrn_row.grid(row=3, column=0, columnspan=2, sticky='w', pady=(6, 0))
+        tk.Label(mrn_row, text='MRN:', bg=PANEL, fg=MGRAY, font=FONT_SMALL).pack(side='left')
+        self._mrn_entry = tk.Entry(mrn_row, width=18, bg='#0d1b2a', fg=WHITE,
+                                   insertbackground=WHITE, font=FONT_MONO,
+                                   relief='flat', bd=4)
+        self._mrn_entry.pack(side='left', padx=(4, 6))
+        self._mrn_entry.bind('<Return>', lambda e: self._load_by_mrn())
+        tk.Button(
+            mrn_row, text='Load',
+            bg=TEAL, fg=WHITE, activebackground=TEAL_LT,
+            font=FONT_SMALL, relief='flat', bd=0, cursor='hand2', padx=8,
+            command=self._load_by_mrn,
+        ).pack(side='left')
+        tk.Label(mrn_row, text=' or ', bg=PANEL, fg=MGRAY, font=FONT_SMALL).pack(side='left')
+        tk.Button(
+            mrn_row, text='⟳  Latest',
             bg=PANEL, fg=TEAL_LT, activebackground=PANEL, activeforeground=WHITE,
             font=FONT_SMALL, relief='flat', bd=0, cursor='hand2',
             command=lambda: threading.Thread(target=self._load_patient, daemon=True).start(),
-        )
-        self._refresh_btn.grid(row=0, column=1, rowspan=3, padx=(24, 0), sticky='e')
+        ).pack(side='left')
+
         pat_frame.columnconfigure(0, weight=1)
 
         # Separator
@@ -226,25 +242,31 @@ class OsteoCollectorApp(tk.Tk):
 
     # ─── Patient loading ──────────────────────────────────────────────────────
 
-    def _load_patient(self):
+    def _load_patient(self, mrn: Optional[str] = None):
         self._set_status('Reading MDB…')
         self._collect_btn.config(state='disabled')
-        self._name_var.set('Loading…')
-        self._meta_var.set('')
 
         try:
-            info = get_latest_patient()
+            if mrn:
+                info = get_patient_by_mrn(mrn)
+                if not info:
+                    self._name_var.set(f'MRN {mrn} not found in MDB')
+                    self._meta_var.set('')
+                    self._set_status(f'Patient {mrn} not found.')
+                    self._update_xps_panel({})
+                    return
+            else:
+                info = get_latest_patient()
+                if not info:
+                    self._name_var.set('No recent patients in MDB')
+                    self._meta_var.set('Ensure MDB_PATH in config is correct and a scan exists within 72 hrs.')
+                    self._set_status('No patients found (last 72 hrs).')
+                    self._update_xps_panel({})
+                    return
         except Exception as e:
             self._log(f"ERROR reading MDB: {e}")
             self._set_status('MDB error — check config.py')
             self._name_var.set('Error reading MDB')
-            return
-
-        if not info:
-            self._name_var.set('No recent patients in MDB')
-            self._meta_var.set('Ensure MDB_PATH in config is correct and a scan exists within 72 hrs.')
-            self._set_status('No patients found (last 72 hrs).')
-            self._update_xps_panel({})
             return
 
         self._patient = info
@@ -285,8 +307,8 @@ class OsteoCollectorApp(tk.Tk):
         else:
             self._session_row.pack_forget()
 
-        # Update XPS panel — re-run detection with scan_date for accurate matching
-        st = xps_status(scan_date=self._scan_date)
+        # Update XPS panel — lock to this patient's MRN + scan_date
+        st = xps_status(scan_date=self._scan_date, mrn=info['mrn'])
         self._xps_map = st['found']
         self.after(0, lambda: self._update_xps_panel(st))
 
@@ -332,6 +354,15 @@ class OsteoCollectorApp(tk.Tk):
                 self._set_status(f'{len(missing)} XPS file(s) missing — see instructions above.')
             else:
                 self._set_status('No patient loaded.')
+
+    def _load_by_mrn(self):
+        mrn = self._mrn_entry.get().strip()
+        if not mrn:
+            mb.showwarning('MRN required', 'Enter a patient MRN first.')
+            return
+        self._name_var.set('Loading…')
+        self._meta_var.set('')
+        threading.Thread(target=self._load_patient, args=(mrn,), daemon=True).start()
 
     def _on_session_select(self, idx: int, label: str):
         self._scan_index = idx

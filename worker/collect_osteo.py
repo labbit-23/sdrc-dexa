@@ -80,20 +80,19 @@ def _classify_xps(xps_path: str) -> str:
 def detect_osteo_xps(
     xps_dir: Optional[str] = None,
     scan_date: Optional[datetime] = None,
+    mrn: Optional[str] = None,
 ) -> dict[str, str]:
     """
-    Find spine + femur XPS files in *xps_dir* by modification time and
-    content classification.  Does NOT require a specific filename pattern —
-    staff can use whatever name GE Lunar assigns.
+    Find spine + femur XPS files in *xps_dir*.
 
     Strategy
     ────────
     1. All .xps files in the watch folder, newest-mtime first.
-    2. Prefer files modified on the *same calendar day* as scan_date.
-       If none, widen to files modified in the last 7 days.
-       If still none, take the 9 most-recently-modified files (safety net).
-    3. Classify each by embedded text ('spine' / 'left_femur' / 'right_femur').
-       Take the first (newest) match for each label.
+    2. **REQUIRED**: if mrn is provided, only consider files whose filename
+       contains the MRN.  This prevents a previous patient's XPS files from
+       being attached to the current patient.
+    3. Narrow further by mtime to the scan_date calendar day (or 7-day window).
+    4. Classify by embedded text ('spine' / 'left_femur' / 'right_femur' / 'combined').
 
     Returns dict with up to three keys:
       {'spine': '/abs/path.xps', 'left_femur': '...', 'right_femur': '...'}
@@ -112,7 +111,20 @@ def detect_osteo_xps(
         log.info("No XPS files in %s", watch)
         return {}
 
-    # Narrow candidates by mtime
+    # ── Step 2: filter by MRN in filename (mandatory when mrn is known) ───────
+    if mrn:
+        mrn_xps = [p for p in all_xps if mrn in p.name]
+        if mrn_xps:
+            log.info("XPS filter: %d file(s) contain MRN %s in filename", len(mrn_xps), mrn)
+            all_xps = mrn_xps
+        else:
+            log.warning(
+                "No XPS files contain MRN %s in filename — refusing to use "
+                "unrelated files.  Ask staff to save XPS with MRN in the filename.", mrn
+            )
+            return {}
+
+    # ── Step 3: narrow by mtime ───────────────────────────────────────────────
     if scan_date:
         target_date = scan_date.date() if isinstance(scan_date, datetime) else scan_date
         candidates = [
@@ -134,7 +146,7 @@ def detect_osteo_xps(
         ]
 
     if not candidates:
-        log.info("No recent XPS — using 9 most-recent files as fallback")
+        log.info("No recent XPS — using all MRN-matched files as fallback")
         candidates = all_xps[:9]
 
     from parse_xps import _has_scan_images
@@ -174,6 +186,7 @@ def detect_osteo_xps(
 def xps_status(
     xps_dir: Optional[str] = None,
     scan_date: Optional[datetime] = None,
+    mrn: Optional[str] = None,
 ) -> dict:
     """
     Return a status dict suitable for the UI.
@@ -187,7 +200,7 @@ def xps_status(
         'message': '...'
       }
     """
-    found   = detect_osteo_xps(xps_dir, scan_date)
+    found   = detect_osteo_xps(xps_dir, scan_date, mrn=mrn)
     missing = [lbl for lbl in XPS_LABELS if lbl not in found]
     ready   = len(missing) == 0
 
@@ -398,6 +411,39 @@ def upload_osteo_scan(mrn: str,
 
 # ─── Recent patient helper (for UI auto-load) ─────────────────────────────────
 
+def get_patient_by_mrn(mrn: str) -> Optional[dict]:
+    """
+    Load patient info + XPS status for any MRN (not just the latest).
+    Returns the same shape as get_latest_patient().
+    """
+    from parse_mdb import MdbParser
+    try:
+        parser = MdbParser(config.MDB_PATH)
+    except Exception as e:
+        log.error("Cannot open MDB: %s", e)
+        return None
+
+    patient = parser.find_patient(mrn)
+    if not patient:
+        return None
+
+    sessions = parser.get_scan_sessions(patient['pat_handle'])
+    if not sessions:
+        return None
+
+    latest = sessions[0]
+    scan_dt = latest.get('scan_date')
+    name = f"{patient.get('last_name', '')} {patient.get('first_name', '')}".strip()
+    status = xps_status(scan_date=scan_dt, mrn=mrn)
+
+    return {
+        'mrn':        mrn,
+        'name':       name,
+        'scan_date':  scan_dt,
+        'xps_status': status,
+    }
+
+
 def get_latest_patient() -> Optional[dict]:
     """
     Return the most recently scanned patient from the MDB (last 72 hrs),
@@ -439,8 +485,8 @@ def get_latest_patient() -> Optional[dict]:
     # _patients stores raw MDB fields: last_name=salutation, first_name=full name
     name = f"{pat_row.get('last_name', '')} {pat_row.get('first_name', '')}".strip()
 
-    # Pass scan_date so XPS matching narrows to the right day
-    status = xps_status(scan_date=best_dt)
+    # Pass mrn + scan_date so XPS matching is locked to this patient
+    status = xps_status(scan_date=best_dt, mrn=mrn)
 
     return {
         'mrn':        mrn,
