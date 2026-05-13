@@ -307,11 +307,14 @@ def extract_images(xps_map: dict[str, str],
             img.save(buf, 'PNG', optimize=True)
             images[label] = buf.getvalue()
             kb = len(images[label]) // 1024
-            _notify(f"  {label_to_filename[label]} ({kb} KB)")
+            msg = f"  {label_to_filename[label]} ({kb} KB)"
+            log.info("Image extracted: %s", msg.strip())
+            _notify(msg)
         except Exception as e:
             log.warning("Failed to encode %s image: %s", label, e)
 
     if not images:
+        log.warning("No scan images extracted from XPS — check debug_xps.py output")
         _notify("  Warning: no scan images could be extracted from XPS files.")
 
     return images
