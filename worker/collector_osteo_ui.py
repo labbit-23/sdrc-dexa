@@ -46,11 +46,11 @@ AMBER   = '#E65100'
 RED     = '#B71C1C'
 RED_L   = '#EF5350'
 
-FONT_TITLE  = ('Helvetica', 13, 'bold')
-FONT_BODY   = ('Helvetica', 10)
-FONT_SMALL  = ('Helvetica', 8)
-FONT_LABEL  = ('Helvetica', 9, 'bold')
-FONT_MONO   = ('Courier New', 8)
+FONT_TITLE  = ('Helvetica', 20, 'bold')
+FONT_BODY   = ('Helvetica', 15)
+FONT_SMALL  = ('Helvetica', 12)
+FONT_LABEL  = ('Helvetica', 13, 'bold')
+FONT_MONO   = ('Courier New', 12)
 
 
 class OsteoCollectorApp(tk.Tk):
@@ -58,7 +58,7 @@ class OsteoCollectorApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title('SDRC — Osteo Data Collector')
-        self.geometry('640x560')
+        self.geometry('960x840')
         self.resizable(False, False)
         self.configure(bg=DARK)
         self.protocol('WM_DELETE_WINDOW', self._on_close)
@@ -77,7 +77,7 @@ class OsteoCollectorApp(tk.Tk):
 
     def _build_ui(self):
         # ── Header ──────────────────────────────────────────────────────────
-        hdr = tk.Frame(self, bg=TEAL, height=52)
+        hdr = tk.Frame(self, bg=TEAL, height=78)
         hdr.pack(fill='x')
         hdr.pack_propagate(False)
 
@@ -100,7 +100,7 @@ class OsteoCollectorApp(tk.Tk):
 
         self._name_var = tk.StringVar(value='Loading…')
         tk.Label(pat_frame, textvariable=self._name_var,
-                 bg=PANEL, fg=WHITE, font=('Helvetica', 14, 'bold')).grid(
+                 bg=PANEL, fg=WHITE, font=('Helvetica', 21, 'bold')).grid(
             row=1, column=0, sticky='w', pady=(2, 0))
 
         self._meta_var = tk.StringVar(value='')
@@ -158,7 +158,7 @@ class OsteoCollectorApp(tk.Tk):
             row_frame.pack(fill='x', pady=2)
 
             dot = tk.Label(row_frame, text='●', fg=MGRAY, bg=PANEL,
-                           font=('Helvetica', 16), width=2)
+                           font=('Helvetica', 24), width=2)
             dot.pack(side='left')
 
             title_lbl = tk.Label(row_frame, text=title, bg=PANEL, fg=WHITE,
@@ -200,7 +200,7 @@ class OsteoCollectorApp(tk.Tk):
         log_frame.pack(fill='both', expand=True, pady=(6, 0))
 
         self._log_text = tk.Text(
-            log_frame, height=6, bg='#080e18', fg='#90CAF9',
+            log_frame, height=8, bg='#080e18', fg='#90CAF9',
             font=FONT_MONO, relief='flat', state='disabled',
             wrap='word', insertbackground=WHITE,
         )
@@ -208,7 +208,7 @@ class OsteoCollectorApp(tk.Tk):
 
         # ── Status bar ───────────────────────────────────────────────────────
         self._status_var = tk.StringVar(value='Initialising…')
-        status_bar = tk.Frame(self, bg=PANEL, height=22)
+        status_bar = tk.Frame(self, bg=PANEL, height=33)
         status_bar.pack(fill='x')
         status_bar.pack_propagate(False)
         tk.Label(status_bar, textvariable=self._status_var,
@@ -216,7 +216,7 @@ class OsteoCollectorApp(tk.Tk):
             side='left', padx=10)
 
         # ── Button row ───────────────────────────────────────────────────────
-        btn_frame = tk.Frame(self, bg=DARK, height=56)
+        btn_frame = tk.Frame(self, bg=DARK, height=84)
         btn_frame.pack(fill='x')
         btn_frame.pack_propagate(False)
 
@@ -225,8 +225,8 @@ class OsteoCollectorApp(tk.Tk):
             text='▲   Collect Scan Data',
             bg=TEAL, fg=WHITE,
             activebackground=TEAL_LT, activeforeground=WHITE,
-            font=('Helvetica', 11, 'bold'), relief='flat',
-            padx=22, pady=10, cursor='hand2',
+            font=('Helvetica', 17, 'bold'), relief='flat',
+            padx=33, pady=15, cursor='hand2',
             state='disabled',
             command=self._on_collect,
         )

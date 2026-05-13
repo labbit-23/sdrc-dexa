@@ -437,7 +437,8 @@ def get_patient_by_mrn(mrn: str) -> Optional[dict]:
 
     latest = sessions[0]
     scan_dt = latest.get('scan_date')
-    name = f"{patient.get('last_name', '')} {patient.get('first_name', '')}".strip()
+    # find_patient() returns {'name': full_name, 'title': salutation, ...}
+    name = f"{patient.get('title', '')} {patient.get('name', '')}".strip()
     status = xps_status(scan_date=scan_dt, mrn=mrn)
 
     return {
