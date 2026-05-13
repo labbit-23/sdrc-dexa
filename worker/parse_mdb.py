@@ -317,9 +317,15 @@ class MdbParser:
             'right_femur':    {},
         }
 
-        # Spine from total-body scan
+        # Spine from body/spine scan
         if body_img:
             session['spine'] = self._extract_spine(body_img['img_handle'])
+            # GE Lunar estimates body composition (Android/Gynoid/Total) from
+            # the AP Spine + Femur analysis and stores it in the Composition
+            # table linked to the spine img_handle — extract it here.
+            comp = self.get_totalbody_regions(body_img['img_handle'])
+            if comp:
+                session['estimated_composition'] = comp
 
         # Left femur
         if left_img:

@@ -227,35 +227,43 @@ class OsteoCollectorApp(tk.Tk):
 
     # ─── XPS row builder ─────────────────────────────────────────────────────
 
-    _OSTEO_LABELS = [
-        ('spine',       'Spine (AP)'),
-        ('left_femur',  'Left Femur'),
-        ('right_femur', 'Right Femur'),
-    ]
-    _TB_LABELS = [
-        ('bone',        'Bone Density'),
-        ('composition', 'Composition'),
-    ]
-
     def _build_xps_rows(self, mode: str):
         """Destroy existing XPS rows and rebuild for the given mode."""
         for w in self._xps_frame.winfo_children():
             w.destroy()
         self._xps_rows = {}
-        labels = self._TB_LABELS if mode == 'total_body' else self._OSTEO_LABELS
-        for key, title in labels:
-            row_frame = tk.Frame(self._xps_frame, bg=PANEL, padx=10, pady=6,
+
+        def _make_row(parent, key, title, width=16):
+            row_frame = tk.Frame(parent, bg=PANEL, padx=10, pady=6,
                                  highlightthickness=1, highlightbackground='#1a3a55')
-            row_frame.pack(fill='x', pady=2)
             dot = tk.Label(row_frame, text='●', fg=MGRAY, bg=PANEL,
                            font=('Helvetica', 24), width=2)
             dot.pack(side='left')
             tk.Label(row_frame, text=title, bg=PANEL, fg=WHITE,
-                     font=FONT_LABEL, width=16, anchor='w').pack(side='left')
+                     font=FONT_LABEL, width=width, anchor='w').pack(side='left')
             path_lbl = tk.Label(row_frame, text='—', bg=PANEL, fg=LGRAY,
                                 font=FONT_MONO, anchor='w')
             path_lbl.pack(side='left', fill='x', expand=True)
             self._xps_rows[key] = {'dot': dot, 'path_lbl': path_lbl, 'frame': row_frame}
+            return row_frame
+
+        if mode == 'total_body':
+            # Two full-width rows: bone, composition
+            for key, title in [('bone', 'Bone Density'), ('composition', 'Composition')]:
+                _make_row(self._xps_frame, key, title).pack(fill='x', pady=2)
+        else:
+            # Row 1: Spine (full width)
+            _make_row(self._xps_frame, 'spine', 'Spine (AP)').pack(fill='x', pady=2)
+            # Row 2: Left + Right Femur side by side
+            femur_row = tk.Frame(self._xps_frame, bg=DARK)
+            femur_row.pack(fill='x', pady=2)
+            for key, title in [('left_femur', 'Left Femur'), ('right_femur', 'Right Femur')]:
+                _make_row(femur_row, key, title, width=12).pack(
+                    side='left', fill='x', expand=True, padx=(0, 2))
+            # Row 3: Estimated composition (MDB — no XPS required)
+            comp_frame = _make_row(self._xps_frame, 'estimated_composition',
+                                   'Estimated Comp.', width=16)
+            comp_frame.pack(fill='x', pady=2)
 
     # ─── Patient loading ──────────────────────────────────────────────────────
 
@@ -324,6 +332,18 @@ class OsteoCollectorApp(tk.Tk):
         else:
             self._session_row.pack_forget()
 
+        # Stash estimated composition from MDB session for UI indicator
+        try:
+            from parse_mdb import MdbParser
+            parser = MdbParser(config.MDB_PATH)
+            patient_row = parser.find_patient(info['mrn'])
+            if patient_row:
+                sessions = parser.get_scan_sessions(patient_row['pat_handle'])
+                if sessions:
+                    info['_estimated_composition'] = sessions[0].get('estimated_composition', {})
+        except Exception:
+            info['_estimated_composition'] = {}
+
         # Detect scan type: check for total body XPS first, fall back to osteo
         mrn = info['mrn']
         tb_found = detect_totalbody_xps(mrn=mrn, scan_date=self._scan_date)
@@ -353,7 +373,19 @@ class OsteoCollectorApp(tk.Tk):
         ready   = st.get('ready', False)
 
         for key, widgets in self._xps_rows.items():
-            if key in found:
+            if key == 'estimated_composition':
+                # MDB-sourced — check if session has composition data
+                comp = (self._patient or {}).get('_estimated_composition')
+                if comp:
+                    regions = ', '.join(comp.keys())
+                    widgets['dot'].config(fg=GREEN_L, text='●')
+                    widgets['path_lbl'].config(fg='#4FC3F7', text=f"MDB — {regions}")
+                    widgets['frame'].config(highlightbackground='#1a5a2a')
+                else:
+                    widgets['dot'].config(fg=MGRAY, text='○')
+                    widgets['path_lbl'].config(fg=MGRAY, text='Not estimated by scanner')
+                    widgets['frame'].config(highlightbackground='#1a3a55')
+            elif key in found:
                 fname = Path(found[key]).name
                 widgets['dot'].config(fg=GREEN_L, text='●')
                 widgets['path_lbl'].config(fg='#4FC3F7', text=fname)

@@ -323,9 +323,10 @@ def build_raw_osteo_json(mrn: str, scan_index: int = 0) -> dict:
             'scanner_serial': sess.get('scanner_serial') or config.SCANNER_ID,
             'software':       sess.get('software') or config.SOFTWARE,
             'ntx_filename':   sess.get('ntx_filename'),
-            'spine':          sess.get('spine', {}),
-            'left_femur':     sess.get('left_femur', {}),
-            'right_femur':    sess.get('right_femur', {}),
+            'spine':                 sess.get('spine', {}),
+            'left_femur':            sess.get('left_femur', {}),
+            'right_femur':           sess.get('right_femur', {}),
+            'estimated_composition': sess.get('estimated_composition', {}),
         },
     }
 
