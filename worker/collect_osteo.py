@@ -137,20 +137,36 @@ def detect_osteo_xps(
         log.info("No recent XPS — using 9 most-recent files as fallback")
         candidates = all_xps[:9]
 
+    from parse_xps import _has_scan_images
+
     mapping: dict[str, str] = {}
+    combined_no_images: Optional[str] = None   # fallback if no combined-with-images found
+
     for xps_path in candidates:
         if len(mapping) == 3:
             break
         label = _classify_xps(str(xps_path))
         abs_path = str(xps_path.resolve())
         mtime_str = datetime.fromtimestamp(xps_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M')
-        if label == 'combined' and not mapping:
-            # Single file contains all three scan types — use for all slots
-            log.info("  %s → combined (spine + left + right femur)  (modified %s)", xps_path.name, mtime_str)
-            mapping = {'spine': abs_path, 'left_femur': abs_path, 'right_femur': abs_path}
+
+        if label == 'combined':
+            has_imgs = _has_scan_images(abs_path)
+            if has_imgs and not mapping:
+                # Best case: combined file that also has images
+                log.info("  %s → combined + images  (modified %s)", xps_path.name, mtime_str)
+                mapping = {'spine': abs_path, 'left_femur': abs_path, 'right_femur': abs_path}
+            elif not has_imgs and combined_no_images is None:
+                # Text-only combined — remember as fallback
+                log.info("  %s → combined (text only, no images)  (modified %s)", xps_path.name, mtime_str)
+                combined_no_images = abs_path
         elif label in XPS_LABELS and label not in mapping:
             mapping[label] = abs_path
             log.info("  %s → %s  (modified %s)", xps_path.name, label, mtime_str)
+
+    # If we only found a text-only combined, still use it (images just won't be available)
+    if not mapping and combined_no_images:
+        log.warning("Only text-only combined XPS found — no scan images will be extracted")
+        mapping = {'spine': combined_no_images, 'left_femur': combined_no_images, 'right_femur': combined_no_images}
 
     return mapping
 

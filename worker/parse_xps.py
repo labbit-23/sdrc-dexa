@@ -210,11 +210,29 @@ _STRIP_ASSIGNMENTS = {
 }
 
 
+def _has_scan_images(xps_path: str) -> bool:
+    """Quick check: does this XPS contain embedded scan strip images?"""
+    try:
+        with zipfile.ZipFile(xps_path) as zf:
+            names = set(zf.namelist())
+            return 'Documents/1/Resources/Images/1.PNG' in names
+    except Exception:
+        return False
+
+
 def extract_scan_images(xps_path: str) -> dict[str, Image.Image]:
     """
     Returns {'spine': PIL.Image, 'left_femur': PIL.Image, 'right_femur': PIL.Image}
     Images are stitched from PNG strips and false-coloured.
-    Missing strips are silently skipped.
+
+    GE Lunar strip layout (verified on SDRC hardware):
+      Strips 1–9   → AP Spine
+      Strips 10–18 → Left Femur  (strip 10 is a thin separator — skipped)
+      Strips 19–29 → Right Femur (strip 19 is a thin separator, 29 is RGBA logo — both skipped)
+
+    Strips are skipped if they are:
+      • RGBA mode (logos / overlays)
+      • Height < 20 px (separator lines)
     """
     results = {}
     with zipfile.ZipFile(xps_path) as zf:
@@ -227,12 +245,19 @@ def extract_scan_images(xps_path: str) -> dict[str, Image.Image]:
                     break
                 try:
                     data = zf.read(path)
-                    strips.append(Image.open(io.BytesIO(data)).convert('RGB'))
+                    img = Image.open(io.BytesIO(data))
+                    # Skip RGBA logos and thin separator lines
+                    if img.mode == 'RGBA' or img.height < 20:
+                        log.debug("Skipping strip %d for %s (%s %dx%d)", n, label, img.mode, img.width, img.height)
+                        continue
+                    strips.append(img.convert('RGB'))
                 except Exception as e:
                     log.warning("Skipping strip %d for %s: %s", n, label, e)
                     break
             if strips:
                 results[label] = _stitch_and_colorise(strips)
+            else:
+                log.warning("No usable strips found for %s in %s", label, xps_path)
     return results
 
 
