@@ -348,6 +348,116 @@ def upload_osteo_raw(
     }
 
 
+# ── Total-body raw upload ─────────────────────────────────────────────────────
+
+def upload_totalbody_raw(
+    mrn:          str,
+    raw_json:     bytes,
+    xps_files:    dict[str, bytes],
+    png_images:   dict[str, bytes] | None = None,
+    patient_data: dict | None = None,
+    session_data: dict | None = None,
+) -> dict:
+    """
+    Upload raw total-body data for one patient (mirrors upload_osteo_raw):
+      • raw_totalbody.json  → Supabase Storage (bucket: raw-totalbody)
+      • img_fat_lean.png etc → Supabase Storage
+      • raw XPS bytes        → Supabase Storage
+      • bmd_patients row     → upserted with mrn
+      • bmd_scans row        → upserted with scan_type='total_body' + image_paths
+
+    image_paths keys: fat_lean, fat_gradient, bone, composite
+    """
+    ts     = datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')
+    bucket = 'raw-totalbody'
+    prefix = f"raw-totalbody/{mrn}/{ts}"
+
+    headers_base = {"Authorization": f"Bearer {config.SUPABASE_KEY}"}
+
+    def _put(path: str, content: bytes, content_type: str):
+        url = f"{config.SUPABASE_URL}/storage/v1/object/{path}"
+        h = {**headers_base, "Content-Type": content_type}
+        r = httpx.put(url, headers=h, content=content, timeout=120)
+        if r.status_code == 400 and 'already exists' in r.text:
+            r = httpx.put(url + "?upsert=true", headers=h, content=content, timeout=120)
+        r.raise_for_status()
+        log.info("Uploaded → %s", path)
+
+    # Storage uploads
+    _put(f"{prefix}/raw_totalbody.json", raw_json, "application/json")
+
+    _img_key = {          # filename → image_paths key
+        'img_fat_lean.png':     'fat_lean',
+        'img_fat_gradient.png': 'fat_gradient',
+        'img_bone.png':         'bone',
+        'img_composite.png':    'composite',
+    }
+    image_paths: dict[str, str] = {}
+    for fname, data in (png_images or {}).items():
+        storage_path = f"{prefix}/{fname}"
+        _put(storage_path, data, "image/png")
+        key = _img_key.get(fname, fname.replace('img_', '').replace('.png', ''))
+        image_paths[key] = storage_path
+
+    for fname, data in xps_files.items():
+        _put(f"{prefix}/{fname}", data, "application/octet-stream")
+
+    n_files = 1 + len(xps_files) + len(image_paths)
+    log.info("Total-body raw upload complete: %s (%d files)", prefix, n_files)
+
+    # DB upserts
+    patient_uuid = scan_uuid = None
+    if patient_data and session_data:
+        sb = _get_client()
+
+        dob = patient_data.get('dob')
+        pat_row = {
+            'pat_handle':  patient_data.get('pat_handle', f"mrn_{mrn}"),
+            'patient_id':  patient_data.get('patient_id', mrn),
+            'mrn':         mrn,
+            'first_name':  patient_data.get('name', ''),
+            'last_name':   patient_data.get('title', ''),
+            'dob':         dob if isinstance(dob, str) else (dob.isoformat() if dob else None),
+            'gender':      patient_data.get('gender', ''),
+            'height_cm':   patient_data.get('height_cm') or None,
+            'weight_kg':   patient_data.get('weight_kg') or None,
+            'physician':   patient_data.get('physician', ''),
+            'updated_at':  datetime.utcnow().isoformat(),
+        }
+        res = sb.table('bmd_patients').upsert(pat_row, on_conflict='pat_handle').execute()
+        patient_uuid = res.data[0]['id']
+        log.info("Upserted bmd_patients: %s", patient_uuid)
+
+        raw_json_str = raw_json.decode()
+        scan_date_raw = session_data.get('scan_date', '')
+        if hasattr(scan_date_raw, 'strftime'):
+            scan_date_str = scan_date_raw.strftime('%Y-%m-%dT%H:%M:%S')
+        else:
+            scan_date_str = str(scan_date_raw)
+
+        scan_handle = f"{patient_data.get('pat_handle', mrn)}_tb_{scan_date_str[:10]}"
+        scan_row = {
+            'patient_id':     patient_uuid,
+            'scan_handle':    scan_handle,
+            'scan_date':      scan_date_str or None,
+            'scanner_serial': session_data.get('scanner_serial') or config.SCANNER_ID,
+            'software':       session_data.get('software') or config.SOFTWARE,
+            'scan_type':      'total_body',
+            'image_paths':    image_paths,
+            'raw_json':       raw_json_str,
+        }
+        res = sb.table('bmd_scans').upsert(scan_row, on_conflict='scan_handle').execute()
+        scan_uuid = res.data[0]['id']
+        log.info("Upserted bmd_scans (total_body): %s", scan_uuid)
+
+    return {
+        'storage_prefix': prefix,
+        'files_uploaded': n_files,
+        'patient_uuid':   patient_uuid,
+        'scan_uuid':      scan_uuid,
+    }
+
+
 # ── High-level sync ───────────────────────────────────────────────────────
 def sync_scan(patient: dict, session: dict, merged: dict, pdf_bytes: bytes) -> dict:
     """

@@ -29,6 +29,9 @@ from collect_osteo import (
     upload_osteo_scan, clear_xps_watch_folder,
     get_sessions_for_mrn,
 )
+from collect_totalbody import (
+    detect_totalbody_xps, tb_xps_status, upload_totalbody_scan,
+)
 
 log = logging.getLogger(__name__)
 
@@ -65,9 +68,10 @@ class OsteoCollectorApp(tk.Tk):
 
         # State
         self._patient: Optional[dict]   = None   # from get_latest_patient()
-        self._xps_map: dict[str, str]   = {}     # {'spine': path, ...}
+        self._xps_map: dict[str, str]   = {}     # {'spine': path, ...} or {'bone': path, ...}
         self._scan_date: Optional[datetime] = None
         self._uploading = False
+        self._scan_mode: str = 'osteo'            # 'osteo' | 'total_body'
 
         self._build_ui()
         # Auto-load on startup in a background thread so the window appears fast
@@ -145,31 +149,12 @@ class OsteoCollectorApp(tk.Tk):
         self._xps_frame = tk.Frame(xps_outer, bg=DARK)
         self._xps_frame.pack(fill='x', pady=(4, 0))
 
-        # Three fixed rows (spine, left femur, right femur)
+        # XPS rows — rebuilt dynamically when scan mode changes
         self._xps_rows: dict[str, dict] = {}
-        labels = [
-            ('spine',       'Spine (AP)'),
-            ('left_femur',  'Left Femur'),
-            ('right_femur', 'Right Femur'),
-        ]
-        for i, (key, title) in enumerate(labels):
-            row_frame = tk.Frame(self._xps_frame, bg=PANEL, padx=10, pady=6,
-                                 highlightthickness=1, highlightbackground='#1a3a55')
-            row_frame.pack(fill='x', pady=2)
-
-            dot = tk.Label(row_frame, text='●', fg=MGRAY, bg=PANEL,
-                           font=('Helvetica', 24), width=2)
-            dot.pack(side='left')
-
-            title_lbl = tk.Label(row_frame, text=title, bg=PANEL, fg=WHITE,
-                                 font=FONT_LABEL, width=14, anchor='w')
-            title_lbl.pack(side='left')
-
-            path_lbl = tk.Label(row_frame, text='—', bg=PANEL, fg=LGRAY,
-                                font=FONT_MONO, anchor='w')
-            path_lbl.pack(side='left', fill='x', expand=True)
-
-            self._xps_rows[key] = {'dot': dot, 'path_lbl': path_lbl, 'frame': row_frame}
+        self._mode_badge_var = tk.StringVar(value='')
+        tk.Label(xps_outer, textvariable=self._mode_badge_var,
+                 bg=DARK, fg=TEAL_LT, font=FONT_SMALL).pack(anchor='w')
+        self._build_xps_rows('osteo')
 
         # ── Session picker (hidden unless patient has >1 scan) ───────────────
         self._session_row = tk.Frame(self, bg=DARK, padx=18)
@@ -240,6 +225,38 @@ class OsteoCollectorApp(tk.Tk):
             command=self._on_close,
         ).pack(side='right', padx=14, pady=8)
 
+    # ─── XPS row builder ─────────────────────────────────────────────────────
+
+    _OSTEO_LABELS = [
+        ('spine',       'Spine (AP)'),
+        ('left_femur',  'Left Femur'),
+        ('right_femur', 'Right Femur'),
+    ]
+    _TB_LABELS = [
+        ('bone',        'Bone Density'),
+        ('composition', 'Composition'),
+    ]
+
+    def _build_xps_rows(self, mode: str):
+        """Destroy existing XPS rows and rebuild for the given mode."""
+        for w in self._xps_frame.winfo_children():
+            w.destroy()
+        self._xps_rows = {}
+        labels = self._TB_LABELS if mode == 'total_body' else self._OSTEO_LABELS
+        for key, title in labels:
+            row_frame = tk.Frame(self._xps_frame, bg=PANEL, padx=10, pady=6,
+                                 highlightthickness=1, highlightbackground='#1a3a55')
+            row_frame.pack(fill='x', pady=2)
+            dot = tk.Label(row_frame, text='●', fg=MGRAY, bg=PANEL,
+                           font=('Helvetica', 24), width=2)
+            dot.pack(side='left')
+            tk.Label(row_frame, text=title, bg=PANEL, fg=WHITE,
+                     font=FONT_LABEL, width=16, anchor='w').pack(side='left')
+            path_lbl = tk.Label(row_frame, text='—', bg=PANEL, fg=LGRAY,
+                                font=FONT_MONO, anchor='w')
+            path_lbl.pack(side='left', fill='x', expand=True)
+            self._xps_rows[key] = {'dot': dot, 'path_lbl': path_lbl, 'frame': row_frame}
+
     # ─── Patient loading ──────────────────────────────────────────────────────
 
     def _load_patient(self, mrn: Optional[str] = None):
@@ -307,14 +324,32 @@ class OsteoCollectorApp(tk.Tk):
         else:
             self._session_row.pack_forget()
 
-        # Update XPS panel — lock to this patient's MRN + scan_date
-        st = xps_status(scan_date=self._scan_date, mrn=info['mrn'])
+        # Detect scan type: check for total body XPS first, fall back to osteo
+        mrn = info['mrn']
+        tb_found = detect_totalbody_xps(mrn=mrn, scan_date=self._scan_date)
+        if tb_found:
+            self._scan_mode = 'total_body'
+            st = tb_xps_status(mrn=mrn, scan_date=self._scan_date)
+        else:
+            self._scan_mode = 'osteo'
+            st = xps_status(scan_date=self._scan_date, mrn=mrn)
         self._xps_map = st['found']
-        self.after(0, lambda: self._update_xps_panel(st))
+        self.after(0, lambda _st=st: self._update_xps_panel(_st))
 
     def _update_xps_panel(self, st: dict):
+        # Rebuild rows if mode changed
+        mode = self._scan_mode
+        expected_keys = {'bone', 'composition'} if mode == 'total_body' else {'spine', 'left_femur', 'right_femur'}
+        if set(self._xps_rows.keys()) != expected_keys:
+            self._build_xps_rows(mode)
+
+        badge = '🦴  TOTAL BODY SCAN' if mode == 'total_body' else '🦷  OSTEO SCAN'
+        self._mode_badge_var.set(badge)
+        btn_label = '▲   Collect Total Body' if mode == 'total_body' else '▲   Collect Scan Data'
+        self._collect_btn.config(text=btn_label)
+
         found   = st.get('found', {})
-        missing = st.get('missing', ['spine', 'left_femur', 'right_femur'])
+        missing = st.get('missing', [])
         ready   = st.get('ready', False)
 
         for key, widgets in self._xps_rows.items():
@@ -387,11 +422,17 @@ class OsteoCollectorApp(tk.Tk):
         self._collect_btn.config(state='disabled', text='Uploading…')
         self._log(f"=== Collecting scan for MRN {mrn} ===")
 
+        mode = self._scan_mode
+
         def _run():
             try:
-                upload_osteo_scan(mrn, self._xps_map,
-                                  progress_cb=self._log,
-                                  scan_index=self._scan_index)
+                if mode == 'total_body':
+                    upload_totalbody_scan(mrn, self._xps_map,
+                                         progress_cb=self._log)
+                else:
+                    upload_osteo_scan(mrn, self._xps_map,
+                                      progress_cb=self._log,
+                                      scan_index=self._scan_index)
                 self.after(0, self._on_success)
             except Exception as e:
                 log.exception("Upload failed: %s", e)
