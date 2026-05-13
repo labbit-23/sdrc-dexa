@@ -19,7 +19,7 @@ from collections import defaultdict
 from typing import Optional
 
 import numpy as np
-from PIL import Image, ImageEnhance, ImageFilter
+from PIL import Image
 
 log = logging.getLogger(__name__)
 
@@ -255,14 +255,14 @@ def extract_scan_images(xps_path: str) -> dict[str, Image.Image]:
                     log.warning("Skipping strip %d for %s: %s", n, label, e)
                     break
             if strips:
-                results[label] = _stitch_and_colorise(strips)
+                results[label] = _stitch_and_crop(strips)
             else:
                 log.warning("No usable strips found for %s in %s", label, xps_path)
     return results
 
 
-def _stitch_and_colorise(strips: list[Image.Image]) -> Image.Image:
-    """Stack strips vertically, crop white borders, apply false-colour DEXA map."""
+def _stitch_and_crop(strips: list[Image.Image]) -> Image.Image:
+    """Stack strips vertically, crop white borders. No colour mapping — original as-is."""
     total_h = sum(s.height for s in strips)
     w = strips[0].width
     full = Image.new('RGB', (w, total_h), (255, 255, 255))
@@ -270,89 +270,22 @@ def _stitch_and_colorise(strips: list[Image.Image]) -> Image.Image:
     for s in strips:
         full.paste(s, (0, y))
         y += s.height
-    return _crop_and_colorise(full)
 
-
-def _crop_and_colorise(img: Image.Image) -> Image.Image:
-    arr = np.array(img)
-
-    # Crop white borders
-    mask = ~((arr[:, :, 0] > 238) & (arr[:, :, 1] > 238) & (arr[:, :, 2] > 238))
-    rows, cols = np.any(mask, axis=1), np.any(mask, axis=0)
-    if rows.any():
-        r0, r1 = int(np.where(rows)[0][0]), int(np.where(rows)[0][-1])
-        c0, c1 = int(np.where(cols)[0][0]), int(np.where(cols)[0][-1])
-        pad = 6
-        img = img.crop((
-            max(0, c0 - pad), max(0, r0 - pad),
-            min(img.width, c1 + pad), min(img.height, r1 + pad),
-        ))
-        arr = np.array(img)
-
-    gray = np.array(img.convert('L'), dtype=float)
-    h, w = gray.shape
-    out = np.zeros((h, w, 3), dtype=np.uint8)
-
-    # background → near-black
-    out[gray < 22] = [8, 14, 24]
-
-    # soft tissue → warm red gradient
-    m = (gray >= 22) & (gray < 80)
-    t = ((gray[m] - 22) / 58.0).clip(0, 1)
-    out[m, 0] = (185 + 55 * t).clip(0, 255).astype(np.uint8)
-    out[m, 1] = (65  + 35 * t).clip(0, 255).astype(np.uint8)
-    out[m, 2] = (50  + 25 * t).clip(0, 255).astype(np.uint8)
-
-    # lean / muscle → teal gradient
-    m = (gray >= 80) & (gray < 165)
-    t = ((gray[m] - 80) / 85.0).clip(0, 1)
-    out[m, 0] = (12  + 50 * t).clip(0, 255).astype(np.uint8)
-    out[m, 1] = (148 + 72 * t).clip(0, 255).astype(np.uint8)
-    out[m, 2] = (162 + 65 * t).clip(0, 255).astype(np.uint8)
-
-    # bone → near-white
-    m = gray >= 165
-    t = ((gray[m] - 165) / 90.0).clip(0, 1)
-    out[m, 0] = (188 + 67 * t).clip(0, 255).astype(np.uint8)
-    out[m, 1] = (218 + 37 * t).clip(0, 255).astype(np.uint8)
-    out[m, 2] = (228 + 27 * t).clip(0, 255).astype(np.uint8)
-
-    result = Image.fromarray(out, 'RGB')
-    result = ImageEnhance.Contrast(result).enhance(1.35)
-    result = result.filter(ImageFilter.UnsharpMask(radius=1, percent=120, threshold=3))
-    return result
-
-
-def _colorise_bone_density(img: Image.Image) -> Image.Image:
-    """Pass-through — return the image exactly as extracted from the XPS."""
-    return img.convert('RGB')
-
-
-def _stitch_bone_density(strips: list[Image.Image]) -> Image.Image:
-    """Stitch + crop + apply bone-density colormap."""
-    total_h = sum(s.height for s in strips)
-    w = strips[0].width
-    full = Image.new('RGB', (w, total_h), (255, 255, 255))
-    y = 0
-    for s in strips:
-        full.paste(s.convert('RGB'), (0, y))
-        y += s.height
-
-    # Crop near-white margins (scanner background is 250–255)
+    # Crop near-white margins
     arr = np.array(full)
-    # Signal = pixels darker than 230 (bone/soft-tissue regions)
-    mask = arr.mean(axis=2) < 230
+    mask = arr.mean(axis=2) < 245
     rows, cols = np.any(mask, axis=1), np.any(mask, axis=0)
     if rows.any():
         r0, r1 = int(np.where(rows)[0][0]), int(np.where(rows)[0][-1])
         c0, c1 = int(np.where(cols)[0][0]), int(np.where(cols)[0][-1])
-        pad = 12
+        pad = 8
         full = full.crop((
             max(0, c0 - pad), max(0, r0 - pad),
             min(full.width, c1 + pad), min(full.height, r1 + pad),
         ))
+    return full
 
-    return _colorise_bone_density(full)
+
 
 
 def _extract_scan_strips(xps_path: str) -> Optional[Image.Image]:
@@ -380,7 +313,7 @@ def _extract_scan_strips(xps_path: str) -> Optional[Image.Image]:
                 log.warning("Skipping strip %s: %s", img_path, e)
     if not strips:
         return None
-    return _stitch_bone_density(strips)
+    return _stitch_and_crop(strips)
 
 
 def extract_osteo_images(
