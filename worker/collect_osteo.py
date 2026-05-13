@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Optional
 
 import config
-from parse_mdb import load_patient_session
+from parse_mdb import load_patient_session, list_patient_sessions
 from parse_xps import extract_xps_text, extract_osteo_images
 
 log = logging.getLogger(__name__)
@@ -247,7 +247,12 @@ def _serial(obj):
     raise TypeError(f"Not JSON-serialisable: {type(obj)}")
 
 
-def build_raw_osteo_json(mrn: str) -> dict:
+def get_sessions_for_mrn(mrn: str) -> list[dict]:
+    """Return all scan sessions for a patient from MDB, newest first."""
+    return list_patient_sessions(config.MDB_PATH, mrn)
+
+
+def build_raw_osteo_json(mrn: str, scan_index: int = 0) -> dict:
     """
     Load the patient + latest spine/hip session from MDB.
     Returns a dict ready for JSON serialisation (same shape as
@@ -255,7 +260,7 @@ def build_raw_osteo_json(mrn: str) -> dict:
 
     Raises RuntimeError if the patient is not found in the MDB.
     """
-    data = load_patient_session(config.MDB_PATH, mrn)
+    data = load_patient_session(config.MDB_PATH, mrn, scan_index=scan_index)
     if not data:
         raise RuntimeError(
             f"Patient MRN '{mrn}' not found in MDB.\n"
@@ -340,7 +345,8 @@ def extract_images(xps_map: dict[str, str],
 
 def upload_osteo_scan(mrn: str,
                       xps_map: dict[str, str],
-                      progress_cb=None) -> dict:
+                      progress_cb=None,
+                      scan_index: int = 0) -> dict:
     """
     Full osteo upload for one patient:
       1. Read MDB → raw_osteo.json
@@ -358,7 +364,7 @@ def upload_osteo_scan(mrn: str,
 
     # 1. MDB data
     notify(f"Reading MDB for MRN {mrn}…")
-    raw_data = build_raw_osteo_json(mrn)
+    raw_data = build_raw_osteo_json(mrn, scan_index=scan_index)
     raw_json_bytes = json.dumps(raw_data, indent=2, default=_serial).encode()
 
     # 2. Images

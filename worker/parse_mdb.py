@@ -435,18 +435,43 @@ class MdbParser:
 
 
 # ── Convenience function ──────────────────────────────────────────────────
-def load_patient_session(mdb_path: str, patient_id: str) -> Optional[dict]:
+def load_patient_session(mdb_path: str, patient_id: str,
+                         scan_index: int = 0) -> Optional[dict]:
     """
-    High-level helper: loads MDB, finds patient, returns their latest scan session
-    merged with patient demographics.
+    High-level helper: loads MDB, finds patient, returns a scan session.
+
+    scan_index: 0 = latest (default), 1 = second most recent, etc.
     """
     parser = MdbParser(mdb_path)
     patient = parser.find_patient(patient_id)
     if not patient:
         log.error("Patient %s not found in MDB", patient_id)
         return None
-    session = parser.get_latest_session(patient['pat_handle'])
-    if not session:
+    sessions = parser.get_scan_sessions(patient['pat_handle'])
+    if not sessions:
         log.error("No scan sessions for patient %s", patient_id)
         return None
-    return {'patient': patient, 'session': session}
+    if scan_index >= len(sessions):
+        log.error("scan_index %d out of range — patient has %d session(s)", scan_index, len(sessions))
+        return None
+    return {'patient': patient, 'session': sessions[scan_index]}
+
+
+def list_patient_sessions(mdb_path: str, patient_id: str) -> list[dict]:
+    """
+    Return all scan sessions for a patient, newest first.
+    Each entry: {'scan_index': int, 'scan_date': datetime, 'scan_handle': str}
+    """
+    parser = MdbParser(mdb_path)
+    patient = parser.find_patient(patient_id)
+    if not patient:
+        return []
+    sessions = parser.get_scan_sessions(patient['pat_handle'])
+    return [
+        {
+            'scan_index':  i,
+            'scan_date':   s.get('scan_date'),
+            'scan_handle': s.get('scan_handle', ''),
+        }
+        for i, s in enumerate(sessions)
+    ]

@@ -26,6 +26,7 @@ from typing import Optional
 import config
 from collect_osteo import (
     get_latest_patient, xps_status, upload_osteo_scan, clear_xps_watch_folder,
+    get_sessions_for_mrn,
 )
 
 log = logging.getLogger(__name__)
@@ -154,6 +155,20 @@ class OsteoCollectorApp(tk.Tk):
 
             self._xps_rows[key] = {'dot': dot, 'path_lbl': path_lbl, 'frame': row_frame}
 
+        # ── Session picker (hidden unless patient has >1 scan) ───────────────
+        self._session_row = tk.Frame(self, bg=DARK, padx=18)
+        tk.Label(self._session_row, text='Scan session:',
+                 bg=DARK, fg=MGRAY, font=FONT_SMALL).pack(side='left', padx=(0, 8))
+        self._session_var = tk.StringVar(value='')
+        self._session_menu = tk.OptionMenu(self._session_row, self._session_var, '')
+        self._session_menu.config(bg=PANEL, fg=WHITE, activebackground=TEAL,
+                                  font=FONT_SMALL, relief='flat', bd=0)
+        self._session_menu['menu'].config(bg=PANEL, fg=WHITE, font=FONT_SMALL)
+        self._session_menu.pack(side='left')
+        # starts hidden
+        self._sessions: list[dict] = []
+        self._scan_index: int = 0
+
         # ── Missing-XPS instruction box ──────────────────────────────────────
         self._instruct_frame = tk.Frame(self, bg='#1a1a00', padx=14, pady=10)
         self._instruct_var   = tk.StringVar(value='')
@@ -235,6 +250,14 @@ class OsteoCollectorApp(tk.Tk):
         self._patient = info
         self._xps_map = info['xps_status']['found']
         self._scan_date = info.get('scan_date')
+        self._scan_index = 0
+
+        # Fetch all sessions so staff can pick an older one
+        try:
+            sessions = get_sessions_for_mrn(info['mrn'])
+        except Exception:
+            sessions = []
+        self._sessions = sessions
 
         # Update patient card
         sd = info['scan_date']
@@ -243,6 +266,24 @@ class OsteoCollectorApp(tk.Tk):
         self._meta_var.set(
             f"MRN: {info['mrn']}   •   Scan: {date_str}   •   Scanner: {config.SCANNER_ID}"
         )
+
+        # Populate session dropdown if there are multiple scans
+        if len(sessions) > 1:
+            labels = []
+            for s in sessions:
+                d = s['scan_date']
+                labels.append(d.strftime('%d %b %Y  %H:%M') if isinstance(d, datetime) else str(d))
+            self._session_var.set(labels[0])
+            menu = self._session_menu['menu']
+            menu.delete(0, 'end')
+            for i, lbl in enumerate(labels):
+                menu.add_command(
+                    label=lbl,
+                    command=lambda idx=i, l=lbl: self._on_session_select(idx, l),
+                )
+            self._session_row.pack(fill='x', padx=16, pady=(0, 4))
+        else:
+            self._session_row.pack_forget()
 
         # Update XPS panel — re-run detection with scan_date for accurate matching
         st = xps_status(scan_date=self._scan_date)
@@ -292,6 +333,15 @@ class OsteoCollectorApp(tk.Tk):
             else:
                 self._set_status('No patient loaded.')
 
+    def _on_session_select(self, idx: int, label: str):
+        self._scan_index = idx
+        self._session_var.set(label)
+        sd = self._sessions[idx]['scan_date']
+        date_str = sd.strftime('%d %b %Y  %H:%M') if isinstance(sd, datetime) else str(sd)
+        self._meta_var.set(
+            f"MRN: {self._patient['mrn']}   •   Scan: {date_str}   •   Scanner: {config.SCANNER_ID}"
+        )
+
     # ─── Upload ───────────────────────────────────────────────────────────────
 
     def _on_collect(self):
@@ -308,7 +358,9 @@ class OsteoCollectorApp(tk.Tk):
 
         def _run():
             try:
-                upload_osteo_scan(mrn, self._xps_map, progress_cb=self._log)
+                upload_osteo_scan(mrn, self._xps_map,
+                                  progress_cb=self._log,
+                                  scan_index=self._scan_index)
                 self.after(0, self._on_success)
             except Exception as e:
                 log.exception("Upload failed: %s", e)
