@@ -299,8 +299,8 @@ def upload_osteo_raw(
             'software':       session_data.get('software') or config.SOFTWARE,
             'xps_filename':   session_data.get('ntx_filename') or None,
             'scan_type':      'osteo',
-            'image_paths':    _json.dumps(image_paths),
-            'raw_json':       _json.dumps(raw_data),
+            'image_paths':    image_paths,          # dict → stored as JSONB object
+            'raw_json':       _json.dumps(raw_data), # TEXT column → JSON string
         }
         res = (
             sb.table('bmd_scans')

@@ -364,18 +364,36 @@ def extract_osteo_images(
     right_femur_xps: str,
 ) -> dict[str, Image.Image]:
     """
-    Extract DEXA scan images from separate per-scan XPS files (osteo workflow).
-    Each XPS contains one scan's strips numbered from 1.
+    Extract DEXA scan images from per-scan or combined XPS files (osteo workflow).
+
+    If all three paths point to the same file (GE Lunar combined XPS), the strip
+    range assignment (strips 1-9 spine, 10-18 left femur, 19-29 right femur) is
+    used via extract_scan_images().  Otherwise each XPS is treated as a
+    single-scan file and strips are detected dynamically.
 
     Returns dict with keys: 'spine', 'left_femur', 'right_femur'
     (only includes keys where an image was successfully extracted).
     """
+    paths = {
+        'spine':       spine_xps,
+        'left_femur':  left_femur_xps,
+        'right_femur': right_femur_xps,
+    }
+
+    # ── Combined XPS: all labels point to the same file ──────────────────────
+    unique_paths = {p for p in paths.values() if p}
+    if len(unique_paths) == 1:
+        combined_path = next(iter(unique_paths))
+        log.info("Combined XPS detected — using strip-range extraction: %s", combined_path)
+        try:
+            return extract_scan_images(combined_path)
+        except Exception as e:
+            log.warning("extract_scan_images failed on combined XPS: %s", e)
+            return {}
+
+    # ── Separate per-scan XPS files ──────────────────────────────────────────
     result: dict[str, Image.Image] = {}
-    for label, path in [
-        ('spine',       spine_xps),
-        ('left_femur',  left_femur_xps),
-        ('right_femur', right_femur_xps),
-    ]:
+    for label, path in paths.items():
         if not path:
             continue
         try:
