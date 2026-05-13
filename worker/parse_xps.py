@@ -338,10 +338,14 @@ def extract_osteo_images(
         'right_femur': right_femur_xps,
     }
 
-    # ── Combined XPS: all labels point to the same file ──────────────────────
-    unique_paths = {p for p in paths.values() if p}
-    if len(unique_paths) == 1:
-        combined_path = next(iter(unique_paths))
+    # ── Combined XPS: ALL three labels present and point to the same file ──────
+    # (not just 1 unique path — that also matches a spine-only per-scan case)
+    all_three_same = (
+        spine_xps and left_femur_xps and right_femur_xps
+        and spine_xps == left_femur_xps == right_femur_xps
+    )
+    if all_three_same:
+        combined_path = spine_xps
         log.info("Combined XPS detected — using strip-range extraction: %s", combined_path)
         try:
             return extract_scan_images(combined_path)

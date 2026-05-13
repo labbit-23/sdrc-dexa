@@ -9,26 +9,36 @@ from PIL import Image
 
 path = sys.argv[1] if len(sys.argv) > 1 else input("XPS path: ").strip()
 
+IMAGE_EXTS = ('.PNG', '.JPG', '.JPEG', '.WDP', '.JXR', '.BMP', '.TIF', '.TIFF')
+
 with zipfile.ZipFile(path) as zf:
     names = zf.namelist()
 
-    # All image entries
-    imgs = [n for n in names if n.upper().endswith('.PNG')]
-    print(f"\n=== {len(imgs)} PNG entries ===")
+    # All image-like entries
+    imgs = [n for n in names if any(n.upper().endswith(e) for e in IMAGE_EXTS)]
+    print(f"\n=== {len(imgs)} image entries (PNG/JPG/WDP/JXR/BMP/TIF) ===")
     for n in sorted(imgs):
+        data = zf.read(n)
         try:
-            data = zf.read(n)
             im = Image.open(io.BytesIO(data))
-            print(f"  {n:60s}  {im.width}x{im.height}  mode={im.mode}")
+            print(f"  {n:70s}  {im.width}x{im.height}  mode={im.mode}")
         except Exception as e:
-            print(f"  {n}  ERROR: {e}")
+            print(f"  {n:70s}  {len(data)} bytes  (PIL cannot open: {e})")
 
-    # Pages present
+    # All resource/image paths (catches unusual extensions)
+    all_res = [n for n in names if 'Resource' in n or 'Image' in n]
+    if all_res:
+        print(f"\n=== All resource/image paths ({len(all_res)}) ===")
+        for n in sorted(all_res):
+            info = zf.getinfo(n)
+            print(f"  {n:70s}  {info.file_size:>8} bytes")
+
+    # Pages
     pages = sorted({n.split('/')[1] for n in names if n.startswith('Documents/')})
     print(f"\n=== Document pages: {pages} ===")
 
-    # Resources per page
-    for page in pages:
-        page_imgs = [n for n in imgs if n.startswith(f'Documents/{page}/')]
-        if page_imgs:
-            print(f"  Page {page}: {len(page_imgs)} images")
+    # Full namelist
+    print(f"\n=== Full namelist ({len(names)} entries) ===")
+    for n in sorted(names):
+        info = zf.getinfo(n)
+        print(f"  {info.file_size:>9} bytes  {n}")

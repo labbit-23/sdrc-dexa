@@ -151,36 +151,40 @@ def detect_osteo_xps(
 
     from parse_xps import _has_scan_images
 
-    mapping: dict[str, str] = {}
-    combined_no_images: Optional[str] = None   # fallback if no combined-with-images found
+    combined_no_images: Optional[str] = None
+    per_scan: dict[str, str] = {}
 
+    # ── Pass 1: prefer combined XPS with embedded images (always wins) ────────
     for xps_path in candidates:
-        if len(mapping) == 3:
-            break
         label = _classify_xps(str(xps_path))
         abs_path = str(xps_path.resolve())
         mtime_str = datetime.fromtimestamp(xps_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M')
-
         if label == 'combined':
-            has_imgs = _has_scan_images(abs_path)
-            if has_imgs and not mapping:
-                # Best case: combined file that also has images
+            if _has_scan_images(abs_path):
                 log.info("  %s → combined + images  (modified %s)", xps_path.name, mtime_str)
-                mapping = {'spine': abs_path, 'left_femur': abs_path, 'right_femur': abs_path}
-            elif not has_imgs and combined_no_images is None:
-                # Text-only combined — remember as fallback
-                log.info("  %s → combined (text only, no images)  (modified %s)", xps_path.name, mtime_str)
+                return {'spine': abs_path, 'left_femur': abs_path, 'right_femur': abs_path}
+            elif combined_no_images is None:
+                log.info("  %s → combined (text only)  (modified %s)", xps_path.name, mtime_str)
                 combined_no_images = abs_path
-        elif label in XPS_LABELS and label not in mapping:
-            mapping[label] = abs_path
+
+    # ── Pass 2: per-scan individual files ────────────────────────────────────
+    for xps_path in candidates:
+        label = _classify_xps(str(xps_path))
+        abs_path = str(xps_path.resolve())
+        mtime_str = datetime.fromtimestamp(xps_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M')
+        if label in XPS_LABELS and label not in per_scan:
+            per_scan[label] = abs_path
             log.info("  %s → %s  (modified %s)", xps_path.name, label, mtime_str)
 
-    # If we only found a text-only combined, still use it (images just won't be available)
-    if not mapping and combined_no_images:
-        log.warning("Only text-only combined XPS found — no scan images will be extracted")
-        mapping = {'spine': combined_no_images, 'left_femur': combined_no_images, 'right_femur': combined_no_images}
+    if per_scan:
+        return per_scan
 
-    return mapping
+    # ── Pass 3: text-only combined (no images, but has BMD data) ─────────────
+    if combined_no_images:
+        log.warning("Only text-only combined XPS found — no scan images will be extracted")
+        return {'spine': combined_no_images, 'left_femur': combined_no_images, 'right_femur': combined_no_images}
+
+    return {}
 
 
 def xps_status(
