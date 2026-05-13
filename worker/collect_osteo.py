@@ -411,8 +411,8 @@ def get_latest_patient() -> Optional[dict]:
         return None
 
     mrn  = (pat_row.get('patient_id') or '').strip()
-    # parse_mdb maps: first_name→name, last_name→title (salutation)
-    name = f"{pat_row.get('title', '')} {pat_row.get('name', '')}".strip()
+    # _patients stores raw MDB fields: last_name=salutation, first_name=full name
+    name = f"{pat_row.get('last_name', '')} {pat_row.get('first_name', '')}".strip()
 
     # Pass scan_date so XPS matching narrows to the right day
     status = xps_status(scan_date=best_dt)
