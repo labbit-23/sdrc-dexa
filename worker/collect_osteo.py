@@ -51,7 +51,11 @@ XPS_LABELS = ('spine', 'left_femur', 'right_femur')
 def _classify_xps(xps_path: str) -> str:
     """
     Read text from an XPS file and classify it as
-    'spine' | 'left_femur' | 'right_femur' | 'unknown'.
+    'spine' | 'left_femur' | 'right_femur' | 'combined' | 'unknown'.
+
+    GE Lunar often produces combined XPS files containing all three scan
+    types (AP Spine + Left Femur + Right Femur) in a single document.
+    These are classified as 'combined' and used for all three slots.
     """
     try:
         tokens = ' '.join(t for _, _, t in extract_xps_text(xps_path))
@@ -62,6 +66,8 @@ def _classify_xps(xps_path: str) -> str:
     has_femur  = any(x in tokens for x in ['Femur', 'femur', 'Neck', 'Trochanter'])
     has_left   = any(x in tokens for x in ['Left', 'left', 'LEFT'])
     has_right  = any(x in tokens for x in ['Right', 'right', 'RIGHT'])
+    if has_spine and has_femur and has_left and has_right:
+        return 'combined'
     if has_spine and not has_femur:
         return 'spine'
     if has_femur and has_left and not has_right:
@@ -136,9 +142,14 @@ def detect_osteo_xps(
         if len(mapping) == 3:
             break
         label = _classify_xps(str(xps_path))
-        if label in XPS_LABELS and label not in mapping:
-            mapping[label] = str(xps_path.resolve())
-            mtime_str = datetime.fromtimestamp(xps_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M')
+        abs_path = str(xps_path.resolve())
+        mtime_str = datetime.fromtimestamp(xps_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M')
+        if label == 'combined' and not mapping:
+            # Single file contains all three scan types — use for all slots
+            log.info("  %s → combined (spine + left + right femur)  (modified %s)", xps_path.name, mtime_str)
+            mapping = {'spine': abs_path, 'left_femur': abs_path, 'right_femur': abs_path}
+        elif label in XPS_LABELS and label not in mapping:
+            mapping[label] = abs_path
             log.info("  %s → %s  (modified %s)", xps_path.name, label, mtime_str)
 
     return mapping
