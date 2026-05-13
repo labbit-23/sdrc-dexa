@@ -1,0 +1,459 @@
+"""
+Osteo (spine + hip) data collector — Windows side only.
+
+Reads the GE Lunar MDB for a patient's spine/femur densitometry data,
+finds the three XPS files (spine, left femur, right femur) in the
+designated XPS folder, extracts scan images, and uploads everything to
+Supabase Storage + DB tables.
+
+XPS file detection strategy
+────────────────────────────
+Files are matched by *modification time*, not by filename.
+Staff just use File → Save As → XPS in GE Lunar with any name.
+The collector looks for XPS files in XPS_WATCH_DIR modified on the
+same calendar day as the MDB scan date (or within the last 7 days as
+a fallback), then classifies them by embedded text content.
+
+After a successful upload the caller should clear the watch folder
+(or the UI prompts the operator to do so) so old files don't bleed
+into the next patient's collection.
+
+Storage layout per upload:
+  raw-osteo/{mrn}/{timestamp}/
+    raw_osteo.json          — full MDB data for this patient + session
+    img_spine.png           — extracted spine DXA image
+    img_left_femur.png      — extracted left femur DXA image
+    img_right_femur.png     — extracted right femur DXA image
+    <original-xps-name>.xps — raw XPS files (kept for reprocessing)
+
+Usage from the UI (collector_osteo_ui.py) or CLI:
+  python collect_osteo.py <mrn>           # mrn == patient_id from GE Lunar
+"""
+
+import io
+import json
+import logging
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import Optional
+
+import config
+from parse_mdb import load_patient_session
+from parse_xps import extract_xps_text, extract_osteo_images
+
+log = logging.getLogger(__name__)
+
+
+# ─── XPS detection ────────────────────────────────────────────────────────────
+
+XPS_LABELS = ('spine', 'left_femur', 'right_femur')
+
+def _classify_xps(xps_path: str) -> str:
+    """
+    Read text from an XPS file and classify it as
+    'spine' | 'left_femur' | 'right_femur' | 'unknown'.
+    """
+    try:
+        tokens = ' '.join(t for _, _, t in extract_xps_text(xps_path))
+    except Exception as e:
+        log.warning("Could not read XPS text from %s: %s", xps_path, e)
+        return 'unknown'
+    has_spine  = any(x in tokens for x in ['Lumbar', 'Spine', 'lumbar', 'spine', 'AP Spine'])
+    has_femur  = any(x in tokens for x in ['Femur', 'femur', 'Neck', 'Trochanter'])
+    has_left   = any(x in tokens for x in ['Left', 'left', 'LEFT'])
+    has_right  = any(x in tokens for x in ['Right', 'right', 'RIGHT'])
+    if has_spine and not has_femur:
+        return 'spine'
+    if has_femur and has_left and not has_right:
+        return 'left_femur'
+    if has_femur and has_right and not has_left:
+        return 'right_femur'
+    return 'unknown'
+
+
+def detect_osteo_xps(
+    xps_dir: Optional[str] = None,
+    scan_date: Optional[datetime] = None,
+) -> dict[str, str]:
+    """
+    Find spine + femur XPS files in *xps_dir* by modification time and
+    content classification.  Does NOT require a specific filename pattern —
+    staff can use whatever name GE Lunar assigns.
+
+    Strategy
+    ────────
+    1. All .xps files in the watch folder, newest-mtime first.
+    2. Prefer files modified on the *same calendar day* as scan_date.
+       If none, widen to files modified in the last 7 days.
+       If still none, take the 9 most-recently-modified files (safety net).
+    3. Classify each by embedded text ('spine' / 'left_femur' / 'right_femur').
+       Take the first (newest) match for each label.
+
+    Returns dict with up to three keys:
+      {'spine': '/abs/path.xps', 'left_femur': '...', 'right_femur': '...'}
+    """
+    watch = Path(xps_dir or config.XPS_WATCH_DIR)
+    if not watch.exists():
+        log.warning("XPS watch dir does not exist: %s", watch)
+        return {}
+
+    all_xps = sorted(
+        watch.glob('*.xps'),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,      # newest first
+    )
+    if not all_xps:
+        log.info("No XPS files in %s", watch)
+        return {}
+
+    # Narrow candidates by mtime
+    if scan_date:
+        target_date = scan_date.date() if isinstance(scan_date, datetime) else scan_date
+        candidates = [
+            p for p in all_xps
+            if datetime.fromtimestamp(p.stat().st_mtime).date() == target_date
+        ]
+        if not candidates:
+            log.info("No XPS modified on %s — widening to 7-day window", target_date)
+            cutoff = datetime.now() - timedelta(days=7)
+            candidates = [
+                p for p in all_xps
+                if datetime.fromtimestamp(p.stat().st_mtime) >= cutoff
+            ]
+    else:
+        cutoff = datetime.now() - timedelta(days=7)
+        candidates = [
+            p for p in all_xps
+            if datetime.fromtimestamp(p.stat().st_mtime) >= cutoff
+        ]
+
+    if not candidates:
+        log.info("No recent XPS — using 9 most-recent files as fallback")
+        candidates = all_xps[:9]
+
+    mapping: dict[str, str] = {}
+    for xps_path in candidates:
+        if len(mapping) == 3:
+            break
+        label = _classify_xps(str(xps_path))
+        if label in XPS_LABELS and label not in mapping:
+            mapping[label] = str(xps_path.resolve())
+            mtime_str = datetime.fromtimestamp(xps_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M')
+            log.info("  %s → %s  (modified %s)", xps_path.name, label, mtime_str)
+
+    return mapping
+
+
+def xps_status(
+    xps_dir: Optional[str] = None,
+    scan_date: Optional[datetime] = None,
+) -> dict:
+    """
+    Return a status dict suitable for the UI.
+
+    Shape:
+      {
+        'found':   {'spine': '/path', 'left_femur': '/path', ...},
+        'missing': ['right_femur'],
+        'ready':   True | False,
+        'xps_files': ['/path1', '/path2', ...],   # all found paths (for upload)
+        'message': '...'
+      }
+    """
+    found   = detect_osteo_xps(xps_dir, scan_date)
+    missing = [lbl for lbl in XPS_LABELS if lbl not in found]
+    ready   = len(missing) == 0
+
+    if ready:
+        msg = "All 3 XPS files found. Ready to upload."
+    else:
+        human = {'spine': 'Spine', 'left_femur': 'Left Femur', 'right_femur': 'Right Femur'}
+        names = ', '.join(human[m] for m in missing)
+        msg = (
+            f"Missing: {names}.\n\n"
+            "In GE Lunar: open the scan → File → Save As → XPS Document\n"
+            f"Save to:  {xps_dir or config.XPS_WATCH_DIR}\n\n"
+            "Then click ⟳ Refresh."
+        )
+
+    return {
+        'found':     found,
+        'missing':   missing,
+        'ready':     ready,
+        'xps_files': list(found.values()),   # flat list for upload loop
+        'message':   msg,
+    }
+
+
+def clear_xps_watch_folder(xps_dir: Optional[str] = None,
+                           paths_to_delete: Optional[list] = None) -> int:
+    """
+    Delete XPS files from the watch folder after a successful upload.
+    If *paths_to_delete* is given, only those files are removed.
+    Otherwise ALL .xps files in the folder are removed.
+    Returns the number of files deleted.
+    """
+    watch = Path(xps_dir or config.XPS_WATCH_DIR)
+    targets = (
+        [Path(p) for p in paths_to_delete]
+        if paths_to_delete
+        else list(watch.glob('*.xps'))
+    )
+    deleted = 0
+    for p in targets:
+        try:
+            p.unlink()
+            log.info("Deleted %s", p.name)
+            deleted += 1
+        except Exception as e:
+            log.warning("Could not delete %s: %s", p.name, e)
+    return deleted
+
+
+# ─── MDB snapshot ─────────────────────────────────────────────────────────────
+
+def _serial(obj):
+    if isinstance(obj, datetime):
+        return obj.strftime('%Y-%m-%d %H:%M:%S')
+    if isinstance(obj, date):
+        return obj.isoformat()
+    raise TypeError(f"Not JSON-serialisable: {type(obj)}")
+
+
+def build_raw_osteo_json(mrn: str) -> dict:
+    """
+    Load the patient + latest spine/hip session from MDB.
+    Returns a dict ready for JSON serialisation (same shape as
+    the existing gen_osteo_json.py output).
+
+    Raises RuntimeError if the patient is not found in the MDB.
+    """
+    data = load_patient_session(config.MDB_PATH, mrn)
+    if not data:
+        raise RuntimeError(
+            f"Patient MRN '{mrn}' not found in MDB.\n"
+            "Check that the patient ID was entered correctly in GE Lunar."
+        )
+
+    pat  = data['patient']
+    sess = data['session']
+
+    return {
+        'patient': {
+            'pat_handle':  pat['pat_handle'],
+            'patient_id':  pat['patient_id'],   # accession no (kept for audit)
+            'mrn':         mrn,                  # MRN == patient_id field in GE Lunar
+            'name':        pat.get('name', ''),
+            'title':       pat.get('title', ''),
+            'dob':         pat['dob'].isoformat() if pat.get('dob') else '',
+            'gender':      pat.get('gender', 'Female'),
+            'ethnicity':   pat.get('ethnicity', ''),
+            'height_cm':   pat.get('height_cm') or 0,
+            'weight_kg':   pat.get('weight_kg') or 0,
+            'bmi':         pat.get('bmi') or 0,
+            'physician':   pat.get('physician', ''),
+        },
+        'session': {
+            'scan_date':      sess.get('scan_date', ''),
+            'scanner_serial': sess.get('scanner_serial') or config.SCANNER_ID,
+            'software':       sess.get('software') or config.SOFTWARE,
+            'ntx_filename':   sess.get('ntx_filename'),
+            'spine':          sess.get('spine', {}),
+            'left_femur':     sess.get('left_femur', {}),
+            'right_femur':    sess.get('right_femur', {}),
+        },
+    }
+
+
+# ─── Image extraction ─────────────────────────────────────────────────────────
+
+def extract_images(xps_map: dict[str, str],
+                   notify=None) -> dict[str, bytes]:
+    """
+    Extract PNG images from the XPS files.
+    Returns {label: png_bytes} for each label in xps_map.
+    Never raises — logs warnings on partial failure.
+    """
+    from PIL import Image as _PILImage
+    _notify = notify or (lambda m: log.info(m))
+
+    images: dict[str, bytes] = {}
+    raw = extract_osteo_images(
+        spine_xps       = xps_map.get('spine', ''),
+        left_femur_xps  = xps_map.get('left_femur', ''),
+        right_femur_xps = xps_map.get('right_femur', ''),
+    )
+
+    label_to_filename = {
+        'spine':       'img_spine.png',
+        'left_femur':  'img_left_femur.png',
+        'right_femur': 'img_right_femur.png',
+    }
+
+    for label, img in raw.items():
+        try:
+            buf = io.BytesIO()
+            img.save(buf, 'PNG', optimize=True)
+            images[label] = buf.getvalue()
+            kb = len(images[label]) // 1024
+            _notify(f"  {label_to_filename[label]} ({kb} KB)")
+        except Exception as e:
+            log.warning("Failed to encode %s image: %s", label, e)
+
+    if not images:
+        _notify("  Warning: no scan images could be extracted from XPS files.")
+
+    return images
+
+
+# ─── Main upload ──────────────────────────────────────────────────────────────
+
+def upload_osteo_scan(mrn: str,
+                      xps_map: dict[str, str],
+                      progress_cb=None) -> dict:
+    """
+    Full osteo upload for one patient:
+      1. Read MDB → raw_osteo.json
+      2. Extract PNG images from XPS
+      3. Upload JSON + PNGs + raw XPS bytes to Supabase Storage
+      4. Upsert patient + scan rows in Supabase DB
+      5. Return upload result dict
+
+    progress_cb(message: str) is called with status strings.
+    Raises on fatal errors (MDB not found, Supabase unreachable, etc.).
+    """
+    from sync_supabase import upload_osteo_raw
+
+    notify = progress_cb or (lambda m: log.info(m))
+
+    # 1. MDB data
+    notify(f"Reading MDB for MRN {mrn}…")
+    raw_data = build_raw_osteo_json(mrn)
+    raw_json_bytes = json.dumps(raw_data, indent=2, default=_serial).encode()
+
+    # 2. Images
+    notify("Extracting scan images from XPS…")
+    images = extract_images(xps_map, notify=notify)
+
+    # 3. Raw XPS bytes (for reprocessing)
+    xps_bytes: dict[str, bytes] = {}
+    for label, path in xps_map.items():
+        p = Path(path)
+        notify(f"Reading {p.name}…")
+        xps_bytes[p.name] = p.read_bytes()
+
+    # 4. Upload
+    notify("Uploading to Supabase…")
+    result = upload_osteo_raw(
+        mrn          = mrn,
+        raw_json     = raw_json_bytes,
+        xps_files    = xps_bytes,
+        png_images   = images,
+        patient_data = raw_data['patient'],
+        session_data = raw_data['session'],
+    )
+
+    notify(
+        f"✓ Done — {len(xps_bytes)} XPS + {len(images)} PNG(s) uploaded.\n"
+        f"  Storage prefix: {result.get('storage_prefix')}"
+    )
+    return result
+
+
+# ─── Recent patient helper (for UI auto-load) ─────────────────────────────────
+
+def get_latest_patient() -> Optional[dict]:
+    """
+    Return the most recently scanned patient from the MDB (last 72 hrs),
+    or None if the MDB is empty / unreachable.
+
+    Returns:
+      {'mrn': str, 'name': str, 'scan_date': datetime, 'xps_status': dict}
+    """
+    from parse_mdb import MdbParser
+    from datetime import timedelta
+
+    try:
+        parser = MdbParser(config.MDB_PATH)
+    except Exception as e:
+        log.error("Cannot open MDB: %s", e)
+        return None
+
+    cutoff = datetime.now() - timedelta(hours=72)
+    best_exam = None
+    best_dt   = None
+
+    for exam in parser._exams:
+        acq = exam.get('_acq_dt')
+        if not acq or acq < cutoff:
+            continue
+        if best_dt is None or acq > best_dt:
+            best_dt   = acq
+            best_exam = exam
+
+    if not best_exam:
+        return None
+
+    pat_handle = best_exam.get('pat_handle', '')
+    pat_row    = parser._patients.get(pat_handle)
+    if not pat_row:
+        return None
+
+    mrn  = (pat_row.get('patient_id') or '').strip()
+    name = f"{pat_row.get('title', '')} {pat_row.get('name', '')}".strip()
+
+    # Pass scan_date so XPS matching narrows to the right day
+    status = xps_status(scan_date=best_dt)
+
+    return {
+        'mrn':        mrn,
+        'name':       name,
+        'scan_date':  best_dt,
+        'xps_status': status,
+    }
+
+
+# ─── Self-test ────────────────────────────────────────────────────────────────
+
+if __name__ == '__main__':
+    import sys
+    logging.basicConfig(level=logging.INFO, format='%(levelname)s %(message)s')
+
+    mrn = sys.argv[1] if len(sys.argv) > 1 else None
+
+    if not mrn:
+        print("Usage: python collect_osteo.py <mrn>")
+        print()
+        print("Checking MDB for latest patient…")
+        latest = get_latest_patient()
+        if latest:
+            print(f"  Latest: {latest['name']}  MRN={latest['mrn']}  scan={latest['scan_date']}")
+            st = latest['xps_status']
+            print(f"  XPS status: {'READY' if st['ready'] else 'NOT READY'}")
+            for lbl, path in st['found'].items():
+                print(f"    ✓ {lbl}: {path}")
+            for lbl in st['missing']:
+                print(f"    ✗ {lbl}: NOT FOUND")
+        else:
+            print("  No recent patients found.")
+        sys.exit(0)
+
+    print(f"MRN: {mrn}")
+    print(f"MDB: {config.MDB_PATH}")
+    print(f"XPS: {config.XPS_WATCH_DIR}")
+    print()
+
+    st = xps_status(mrn)
+    print(f"XPS status: {'READY' if st['ready'] else 'NOT READY'}")
+    for lbl, path in st['found'].items():
+        print(f"  ✓ {lbl}: {Path(path).name}")
+    for lbl in st['missing']:
+        print(f"  ✗ {lbl}: NOT FOUND")
+
+    if not st['ready']:
+        print()
+        print(st['message'])
+        sys.exit(1)
+
+    print()
+    upload_osteo_scan(mrn, st['found'], progress_cb=print)

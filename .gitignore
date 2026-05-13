@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+venv/
+.venv/
+env/
+*.egg-info/
+dist/
+build/
+.eggs/
+pip-wheel-metadata/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# SQLite dedup store
+processed.db
+*.db
+
+# Node (frontend dev folder)
+node_modules/
+.next/
+out/
+.cache/
+
+# macOS
+.DS_Store
+*.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Output
+*.pdf
+*.log

@@ -1,0 +1,26 @@
+# SDRC DEXA Worker dependencies
+# Install: pip install -r requirements.txt
+
+# MDB reading
+# Windows: pyodbc (Access ODBC driver built into Windows)
+# macOS/Linux dev: install mdbtools via brew/apt, no Python package needed
+pyodbc>=4.0; sys_platform == "win32"
+
+# Image processing
+Pillow>=10.0
+numpy>=1.24
+
+# PDF generation
+reportlab>=4.0
+
+# HTTP client (Supabase storage upload)
+httpx>=0.27
+
+# Supabase client
+supabase>=2.0
+
+# Environment config
+python-dotenv>=1.0
+
+# Windows tray app (Windows only)
+pystray>=0.19; sys_platform == "win32"
