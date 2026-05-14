@@ -235,6 +235,8 @@ def upload_osteo_raw(
     _put(f"{prefix}/raw_osteo.json", raw_json, "application/json")
 
     image_paths: dict[str, str] = {}
+
+    # Strip-assembled scan images (keyed by label)
     label_to_file = {
         'spine':       'img_spine.png',
         'left_femur':  'img_left_femur.png',
@@ -245,6 +247,18 @@ def upload_osteo_raw(
             storage_path = f"{prefix}/{fname}"
             _put(storage_path, png_images[label], "image/png")     # type: ignore[index]
             image_paths[label] = storage_path
+
+    # Overlay pages (mutool-rendered, ROI lines baked in; keyed by filename)
+    overlay_files = {
+        'img_spine_overlay.png':       'spine_overlay',
+        'img_left_femur_overlay.png':  'left_femur_overlay',
+        'img_right_femur_overlay.png': 'right_femur_overlay',
+    }
+    for fname, key in overlay_files.items():
+        if fname in (png_images or {}):
+            storage_path = f"{prefix}/{fname}"
+            _put(storage_path, png_images[fname], "image/png")     # type: ignore[index]
+            image_paths[key] = storage_path
 
     for fname, data in xps_files.items():
         _put(f"{prefix}/{fname}", data, "application/octet-stream")

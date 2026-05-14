@@ -15,13 +15,52 @@ import zipfile
 import re
 import io
 import logging
+import subprocess
+import tempfile
 from collections import defaultdict
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
 from PIL import Image
 
 log = logging.getLogger(__name__)
+
+
+# ── XPS page rendering (requires mupdf-tools: apt install mupdf-tools) ────────
+def render_xps_pages(xps_path: str, dpi: int = 150) -> list[bytes]:
+    """
+    Render every page of an XPS file to PNG using mutool (mupdf-tools).
+    Returns a list of PNG bytes, one per page, in page order.
+    Returns [] if mutool is unavailable or fails.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        out_pat = str(Path(tmpdir) / "page%d.png")
+        try:
+            r = subprocess.run(
+                ["mutool", "draw", "-r", str(dpi), "-o", out_pat, xps_path],
+                capture_output=True, text=True, timeout=60,
+            )
+            if r.returncode != 0:
+                log.warning("mutool draw failed for %s: %s", xps_path, r.stderr[:200])
+                return []
+        except FileNotFoundError:
+            log.warning("mutool not found — install mupdf-tools for overlay images")
+            return []
+        except subprocess.TimeoutExpired:
+            log.warning("mutool timed out on %s", xps_path)
+            return []
+
+        pages: list[bytes] = []
+        i = 1
+        while True:
+            p = Path(tmpdir) / f"page{i}.png"
+            if not p.exists():
+                break
+            pages.append(p.read_bytes())
+            i += 1
+        log.info("render_xps_pages: %d page(s) from %s", len(pages), Path(xps_path).name)
+        return pages
 
 # ── Text extraction ────────────────────────────────────────────────────────
 def extract_xps_text(xps_path: str) -> list[tuple[float, float, str]]:
@@ -369,12 +408,66 @@ def extract_osteo_images(
     return result
 
 
+def render_osteo_overlay_pages(
+    spine_xps: str,
+    left_femur_xps: str,
+    right_femur_xps: str,
+    dpi: int = 150,
+) -> dict[str, bytes]:
+    """
+    Render XPS pages to PNG using mutool, preserving the ROI overlay lines
+    (the L1-L4 boxes, femur neck lines, etc.) that are XAML vector paths and
+    cannot be captured from raw strip PNGs.
+
+    Returns dict with PNG bytes keyed by slot name:
+      'spine_overlay'       — page(s) from the spine XPS
+      'left_femur_overlay'  — page(s) from the left femur XPS
+      'right_femur_overlay' — page(s) from the right femur XPS
+
+    For combined XPS (all three labels point to same file) the pages are split:
+      page 1 → spine, page 2 → left femur, page 3 → right femur.
+
+    Missing keys mean rendering failed or no XPS was provided.
+    """
+    all_three_same = (
+        spine_xps and left_femur_xps and right_femur_xps
+        and spine_xps == left_femur_xps == right_femur_xps
+    )
+
+    out: dict[str, bytes] = {}
+
+    if all_three_same:
+        pages = render_xps_pages(spine_xps, dpi=dpi)
+        mapping = {0: 'spine_overlay', 1: 'left_femur_overlay', 2: 'right_femur_overlay'}
+        for idx, key in mapping.items():
+            if idx < len(pages):
+                out[key] = pages[idx]
+        return out
+
+    # Separate XPS files — render each independently, take page 1
+    for label, path in [
+        ('spine_overlay',       spine_xps),
+        ('left_femur_overlay',  left_femur_xps),
+        ('right_femur_overlay', right_femur_xps),
+    ]:
+        if not path:
+            continue
+        pages = render_xps_pages(path, dpi=dpi)
+        if pages:
+            out[label] = pages[0]   # first page is always the scan + overlays
+
+    return out
+
+
 # ── XPS type detection ────────────────────────────────────────────────────
 _TB_COMPOSITION_RE = re.compile(
     r'%\s*Fat|Android\s*%|Gynoid|Lean\s+Mass', re.IGNORECASE
 )
 _TB_BONE_REGION_RE = re.compile(
     r'(?:Pelvis|Trunk|Ribs)\s+[\d.]+\s+[\d.]+', re.IGNORECASE
+)
+_TB_BONE_TITLE_RE = re.compile(
+    r'Total\s+Body\s+Bone\s+Density', re.IGNORECASE
 )
 
 
@@ -397,9 +490,20 @@ def detect_xps_type(xps_path: str) -> str:
 
     full = ' '.join(t for _, _, t in glyphs)
 
+    # Check total-body bone region markers FIRST — Pelvis/Trunk/Ribs followed by
+    # numbers only appear in total-body bone density reports, never in spine/femur
+    # osteo reports.  Must come before the densitometry-count check because a
+    # multi-region TB bone XPS (Head, Arms, Trunk, Pelvis, Ribs, Spine, Total …)
+    # has many "Densitometry Reference:" sections and would otherwise be mis-
+    # classified as 'spine_femur'.
+    # "Total Body Bone Density" title is present on every TB bone page —
+    # catches single-region exports (e.g. Head-only) that lack Pelvis/Trunk/Ribs.
+    if _TB_BONE_REGION_RE.search(full) or _TB_BONE_TITLE_RE.search(full):
+        return 'totalbody_bone'
+
     # Spine+femur: has at least 2 "Densitometry Reference:" sections
     # (spine + left femur + right femur = 3). Total-body bone has exactly 1
-    # ("Densitometry Reference: Total").
+    # ("Densitometry Reference: Total") — but the multi-region case is caught above.
     densito_count = len(re.findall(r'Densitometry Reference:', full))
     if densito_count >= 2:
         return 'spine_femur'

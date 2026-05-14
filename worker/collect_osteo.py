@@ -39,7 +39,7 @@ from typing import Optional
 
 import config
 from parse_mdb import load_patient_session, list_patient_sessions
-from parse_xps import extract_xps_text, extract_osteo_images
+from parse_xps import extract_xps_text, extract_osteo_images, render_osteo_overlay_pages
 
 log = logging.getLogger(__name__)
 
@@ -371,6 +371,28 @@ def extract_images(xps_map: dict[str, str],
     if not images:
         log.warning("No scan images extracted from XPS — check debug_xps.py output")
         _notify("  Warning: no scan images could be extracted from XPS files.")
+
+    # ── Overlay pages via mutool (ROI boxes baked in) ────────────────────────
+    _notify("  Rendering overlay pages…")
+    overlay_map = {
+        'spine_overlay':       'img_spine_overlay.png',
+        'left_femur_overlay':  'img_left_femur_overlay.png',
+        'right_femur_overlay': 'img_right_femur_overlay.png',
+    }
+    try:
+        overlays = render_osteo_overlay_pages(
+            spine_xps       = xps_map.get('spine', ''),
+            left_femur_xps  = xps_map.get('left_femur', ''),
+            right_femur_xps = xps_map.get('right_femur', ''),
+        )
+        for key, fname in overlay_map.items():
+            if key in overlays:
+                images[fname] = overlays[key]
+                kb = len(overlays[key]) // 1024
+                _notify(f"  {fname} ({kb} KB)")
+    except Exception as e:
+        log.warning("Overlay rendering failed: %s", e)
+        _notify(f"  Warning: overlay rendering failed — {e}")
 
     return images
 
