@@ -116,18 +116,12 @@ def _parse_all_strip_bounds(xps_path: str) -> dict[str, tuple[float, float, floa
                 break
 
     # Cap bottom at "Image not for diagnosis" disclaimer to exclude GE footer.
-    # Try OriginY-first attribute order, then UnicodeString-first.
-    disclaimer_re = re.compile(
-        r'OriginY="([\d.]+)"[^>]{0,300}?UnicodeString="[^"]*not\s+for\s+diagnosis[^"]*"'
-        r'|'
-        r'UnicodeString="[^"]*not\s+for\s+diagnosis[^"]*"[^>]{0,300}?OriginY="([\d.]+)"',
-        re.IGNORECASE | re.DOTALL,
-    )
+    # Two-step: find the disclaimer string, then find OriginY in surrounding context.
     disclaimer_ys = []
-    for m in disclaimer_re.finditer(fpage):
-        y_str = m.group(1) or m.group(2)
-        if y_str:
-            disclaimer_ys.append(float(y_str))
+    for m in re.finditer(r'not\s+for\s+diagnosis', fpage, re.IGNORECASE):
+        ctx = fpage[max(0, m.start() - 800) : m.start() + 200]
+        for oy in re.findall(r'OriginY="([\d.]+)"', ctx):
+            disclaimer_ys.append(float(oy))
     cap_y = (min(disclaimer_ys) - 2) if disclaimer_ys else None
 
     result = {}
