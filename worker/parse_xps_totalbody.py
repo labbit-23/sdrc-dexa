@@ -118,7 +118,8 @@ def colorize_dexa_silhouette(img: Image.Image, mode: str = 'fat_lean') -> Image.
 
 # ── Bone density (Full_body.xps) ──────────────────────────────────────────────
 
-_REGION_RE    = re.compile(r'(Head|Arms|Legs|Trunk|Ribs|Pelvis|Spine)-\s*([\d.]+)\s*-')
+# Handles both dash-separated (Head- 1.234 -) and whitespace-separated (Head 1.234) formats
+_REGION_RE    = re.compile(r'(Head|Arms|Legs|Trunk|Ribs|Pelvis|Spine)(?:\s*-\s*|\s+)([\d.]+)(?:\s*-|\b)')
 _TOTAL_BMD_RE = re.compile(r'Total([-+]?[\d.]+)\s+([\d.]+)\s+([-+]?[\d.]+)')
 # Total<Z>  <BMD>  <T>  (Z is glued to "Total" like "Total0.2")
 
