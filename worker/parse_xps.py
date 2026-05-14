@@ -125,22 +125,19 @@ def _parse_scan_bounds(xps_path: str) -> tuple[float, float, float, float] | Non
 
 
 def _auto_trim(img: Image.Image, bg_threshold: int = 230, padding: int = 12) -> Image.Image:
-    """
-    Trim near-white/background from top and sides only.
-    Bottom is left intact — the XPS clip coordinate is already the hard bottom.
-    """
+    """Trim near-white/background rows and columns from all four edges."""
     gray = np.array(img.convert('L'))
     dark_rows = np.where(gray.min(axis=1) < bg_threshold)[0]
     dark_cols = np.where(gray.min(axis=0) < bg_threshold)[0]
     if len(dark_rows) == 0 or len(dark_cols) == 0:
         return img
-    r0 = int(dark_rows[0])
+    r0, r1 = int(dark_rows[0]), int(dark_rows[-1])
     c0, c1 = int(dark_cols[0]), int(dark_cols[-1])
     box = (
         max(0,          c0 - padding),
         max(0,          r0 - padding),
         min(img.width,  c1 + padding),
-        img.height,                    # keep bottom as-is
+        min(img.height, r1 + padding),
     )
     return img.crop(box)
 
