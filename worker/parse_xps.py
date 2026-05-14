@@ -71,7 +71,7 @@ def _parse_all_strip_bounds(xps_path: str) -> dict[str, tuple[float, float, floa
     GE Lunar strip assignments (verified):
       Strips  1– 9  → 'spine'
       Strips 10–18  → 'left_femur'
-      Strips 19–29  → 'right_femur'
+      Strips 19–28  → 'right_femur'   (strip 29 = RGBA colour-scale bar, excluded)
 
     Returns dict with keys from the above set, only for regions that have strips.
     Values are (x1, y1, x2, y2) in XPS units with a small margin.
@@ -79,7 +79,7 @@ def _parse_all_strip_bounds(xps_path: str) -> dict[str, tuple[float, float, floa
     _STRIP_REGIONS = {
         'spine':       range(1, 10),
         'left_femur':  range(10, 19),
-        'right_femur': range(19, 30),
+        'right_femur': range(19, 29),  # strip 29 is the colour-scale bar (RGBA, Y≈979)
     }
 
     try:
@@ -464,7 +464,7 @@ def _parse_femur_block(text: str) -> dict:
 _STRIP_ASSIGNMENTS = {
     'spine':       range(1, 10),    # strips 1-9
     'left_femur':  range(10, 19),   # strips 10-18
-    'right_femur': range(19, 30),   # strips 19-29
+    'right_femur': range(19, 29),   # strips 19-28  (strip 29 = colour-scale bar, RGBA)
 }
 
 
@@ -673,8 +673,9 @@ def render_osteo_overlay_pages(
             else:
                 log.warning("render_osteo_overlay_pages: no strip bounds for %s", region)
 
-        # Normalise both femur PNGs to identical pixel dimensions so CSS
-        # object-fit:contain renders them at the same visual scale.
+        # Normalise both femur PNGs to identical pixel dimensions.
+        # PAD (white canvas) not stretch — preserves content scale so both
+        # images look the same size inside the CSS height:200px container.
         if 'left_femur_overlay' in out and 'right_femur_overlay' in out:
             lf_img = Image.open(io.BytesIO(out['left_femur_overlay'])).convert('RGB')
             rf_img = Image.open(io.BytesIO(out['right_femur_overlay'])).convert('RGB')
@@ -682,7 +683,9 @@ def render_osteo_overlay_pages(
             th = max(lf_img.height, rf_img.height)
             for slot, img in [('left_femur_overlay', lf_img), ('right_femur_overlay', rf_img)]:
                 if img.width != tw or img.height != th:
-                    img = img.resize((tw, th), Image.LANCZOS)
+                    canvas = Image.new('RGB', (tw, th), (255, 255, 255))
+                    canvas.paste(img, ((tw - img.width) // 2, 0))
+                    img = canvas
                 buf = io.BytesIO()
                 img.save(buf, 'PNG', optimize=True)
                 out[slot] = buf.getvalue()
