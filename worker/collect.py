@@ -123,7 +123,18 @@ def mdb_snapshot(patient_id: str) -> dict:
         if row.get('patient_id', '').strip() == patient_id
     ]
 
-    patients_out = {ph: {k: _ser(v) for k, v in parser._patients[ph].items()}
+    # Use _parse_patient() so fields like dob are properly converted
+    # (raw rows have birth_time as Excel serial, not a usable date string)
+    def _ser_patient(parsed: dict) -> dict:
+        out = {}
+        for k, v in parsed.items():
+            if hasattr(v, 'isoformat'):   # date or datetime
+                out[k] = v.isoformat()
+            else:
+                out[k] = _ser(v)
+        return out
+
+    patients_out = {ph: _ser_patient(parser._parse_patient(parser._patients[ph]))
                     for ph in pat_handles}
 
     exams_out = [

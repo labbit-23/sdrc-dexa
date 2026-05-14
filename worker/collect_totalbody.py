@@ -265,7 +265,7 @@ def _patient_from_snapshot(mrn: str, snap: dict, xps_bone=None, xps_comp=None) -
         'patient_id':  mrn,
         'name':        xps_pat.get('name') or pat_row.get('first_name', ''),
         'title':       xps_pat.get('title') or pat_row.get('last_name', ''),
-        'dob':         pat_row.get('birth_date') or pat_row.get('dob', ''),
+        'dob':         pat_row.get('dob') or '',
         'gender':      xps_pat.get('gender') or pat_row.get('gender', ''),
         'height_cm':   xps_pat.get('height_cm') or float(pat_row.get('height') or 0),
         'weight_kg':   xps_pat.get('weight_kg') or float(pat_row.get('weight') or 0),
