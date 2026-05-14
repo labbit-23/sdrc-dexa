@@ -251,6 +251,13 @@ def extract_tb_images(xps_map: dict[str, str], notify=None) -> dict[str, bytes]:
 
 # ─── Patient info for DB upsert ───────────────────────────────────────────────
 
+def _ge_date_to_iso(s: str) -> str:
+    """Convert GE Lunar DD-MM-YYYY to ISO YYYY-MM-DD; return original if unrecognised."""
+    import re
+    m = re.match(r'^(\d{2})-(\d{2})-(\d{4})$', s or '')
+    return f"{m.group(3)}-{m.group(2)}-{m.group(1)}" if m else s
+
+
 def _patient_from_snapshot(mrn: str, snap: dict, xps_bone=None, xps_comp=None) -> tuple[dict, dict]:
     """Extract patient_data + session_data dicts for upload_totalbody_raw."""
     pat_handles = list(snap.get('patients', {}).keys())
@@ -271,7 +278,7 @@ def _patient_from_snapshot(mrn: str, snap: dict, xps_bone=None, xps_comp=None) -
         'weight_kg':   xps_pat.get('weight_kg') or float(pat_row.get('weight') or 0),
         'physician':   xps_pat.get('physician') or pat_row.get('physician', ''),
     }
-    scan_dt = xps_pat.get('scan_date_str') or exam.get('_acq_dt', '')
+    scan_dt = _ge_date_to_iso(xps_pat.get('scan_date_str', '')) or exam.get('_acq_dt', '')
     session_data = {
         'scan_date':      scan_dt,
         'scanner_serial': exam.get('scanner_id') or config.SCANNER_ID,

@@ -63,26 +63,51 @@ def render_xps_pages(xps_path: str, dpi: int = 150) -> list[bytes]:
         return pages
 
 
-def _parse_scan_bounds(xps_path: str) -> tuple[float, float, float, float] | None:
+def _parse_scan_bounds(xps_path: str, page_num: int = 1) -> tuple[float, float, float, float] | None:
     """
     Parse the fpage XAML to find the bounding box of the scan image region.
 
-    GE Lunar XPS layout (816×1056 XPS units, 96 Dpi native):
-      - Scan strips (ImageBrush elements): left portion of page
-      - Overlay canvases (ROI boxes): clipped to the scan image area
-      - BMD reference chart: right portion (~x > 400)
+    Uses ImageBrush Viewport coordinates (the actual strip positions in XPS units)
+    as the authoritative scan region — these are always present and correct for any
+    scan type (spine, left femur, right femur).  Falls back to Clip path parsing
+    if no ImageBrush Viewports are found.
 
-    Returns (x1, y1, x2, y2) in XPS units, or None on failure.
-    Uses the clip paths of the overlay Canvas elements as the authoritative
-    scan image bounds (they're always tight around the scan region).
+    page_num: 1-indexed page number within the XPS (use >1 for combined XPS files
+              where page 1=spine, 2=left femur, 3=right femur).
     """
     try:
         with zipfile.ZipFile(xps_path) as z:
-            fpage = z.read("Documents/1/Pages/1.fpage").decode("utf-8", errors="replace")
+            fpage_name = f"Documents/1/Pages/{page_num}.fpage"
+            fpage = z.read(fpage_name).decode("utf-8", errors="replace")
     except Exception:
         return None
 
-    # Find all clip-path rectangles — match Clip="M x1,y1 L ... x2,y2 ..." anywhere
+    # ── Primary: ImageBrush Viewport coords (strip positions in XPS units) ───
+    # Matches: Viewport="x,y,w,h" on elements that reference Images/N.PNG
+    viewport_re = re.compile(
+        r'ImageSource="[^"]*Images/\d+\.PNG"[^>]*Viewport="([\d.]+),([\d.]+),([\d.]+),([\d.]+)"'
+        r'|'
+        r'Viewport="([\d.]+),([\d.]+),([\d.]+),([\d.]+)"[^>]*ImageSource="[^"]*Images/\d+\.PNG"',
+        re.IGNORECASE,
+    )
+    strip_boxes: list[tuple[float, float, float, float]] = []
+    for m in viewport_re.finditer(fpage):
+        grp = m.group(1, 2, 3, 4) if m.group(1) else m.group(5, 6, 7, 8)
+        x, y, w, h = (float(v) for v in grp)
+        if w > 20 and h > 5:   # skip degenerate viewports
+            strip_boxes.append((x, y, x + w, y + h))
+
+    if strip_boxes:
+        bx1 = min(c[0] for c in strip_boxes)
+        by1 = min(c[1] for c in strip_boxes)
+        bx2 = max(c[2] for c in strip_boxes)
+        by2 = max(c[3] for c in strip_boxes)
+        margin_side = 8
+        result = (max(0, bx1 - margin_side), max(0, by1 - 30), bx2 + margin_side, by2 + 4)
+        log.info("_parse_scan_bounds(page %d): %d strips → %s", page_num, len(strip_boxes), result)
+        return result
+
+    # ── Fallback: Clip path rectangles on Canvas elements ───────────────────
     clip_re = re.compile(
         r'Clip="M\s*([\d.]+),([\d.]+)\s+L\s*[\d.]+,[\d.]+\s+([\d.]+),([\d.]+)'
     )
@@ -90,22 +115,17 @@ def _parse_scan_bounds(xps_path: str) -> tuple[float, float, float, float] | Non
     for m in clip_re.finditer(fpage):
         x1, y1, x2, y2 = float(m.group(1)), float(m.group(2)), float(m.group(3)), float(m.group(4))
         w, h = x2 - x1, y2 - y1
-        # Filter to scan-side clips (left half of page, portrait aspect ratio)
-        if x1 < 200 and w > 50 and h > w:
+        if x1 < 300 and w > 30 and h > 20:
             scan_clips.append((x1, y1, x2, y2))
 
     if not scan_clips:
         return None
 
-    # Union of all scan-side clips
     bx1 = min(c[0] for c in scan_clips)
     by1 = min(c[1] for c in scan_clips)
     bx2 = max(c[2] for c in scan_clips)
     by2 = max(c[3] for c in scan_clips)
 
-    # Find the section title ("AP Spine Bone Density", "Left Femur …" etc.)
-    # by locating Glyphs whose UnicodeString contains "Bone Density" or "Femur"
-    # and whose Y position is just above the clip region.
     title_re = re.compile(
         r'OriginY="([\d.]+)"[^>]*UnicodeString="([^"]*(?:Bone\s+Density|Femur|Composition)[^"]*)"',
         re.IGNORECASE,
@@ -113,16 +133,14 @@ def _parse_scan_bounds(xps_path: str) -> tuple[float, float, float, float] | Non
     title_y: float | None = None
     for m in title_re.finditer(fpage):
         y = float(m.group(1))
-        if y < by1:                    # must be above the clip region
+        if y < by1:
             if title_y is None or y > title_y:
-                title_y = y            # take the closest title above
+                title_y = y
 
     margin_side = 8
     top = max(0, (title_y - 18) if title_y is not None else (by1 - 30))
-    # by2 is exactly the bottom border of the last ROI box (L4/femur total).
-    # Do NOT add margin — COMMENTS: text starts immediately below by2.
     result = (max(0, bx1 - margin_side), top, bx2 + margin_side, by2)
-    log.info("_parse_scan_bounds: clips=%d title_y=%s bounds=%s", len(scan_clips), title_y, result)
+    log.info("_parse_scan_bounds(page %d, clip fallback): clips=%d bounds=%s", page_num, len(scan_clips), result)
     return result
 
 
@@ -175,16 +193,15 @@ def _auto_trim(img: Image.Image, bg_threshold: int = 230, padding: int = 12) -> 
     return img.crop(box)
 
 
-def crop_xps_scan_image(page_png_bytes: bytes, xps_path: str, dpi: int = 200) -> bytes:
+def crop_xps_scan_image(page_png_bytes: bytes, xps_path: str, dpi: int = 200, page_num: int = 1) -> bytes:
     """
     Crop the rendered page PNG to just the scan image region (with ROI overlays).
-    1. Use fpage clip coordinates to isolate the left scan column.
-    2. Auto-trim remaining whitespace so blank rows below the scan are removed.
-    Falls back to the full page if bounds cannot be determined.
+    Uses ImageBrush Viewport coords from the correct fpage (page_num) to find
+    the scan region, then auto-trims blank space.
     """
-    bounds = _parse_scan_bounds(xps_path)
+    bounds = _parse_scan_bounds(xps_path, page_num=page_num)
     if bounds is None:
-        log.warning("crop_xps_scan_image: could not parse bounds — returning full page")
+        log.warning("crop_xps_scan_image: could not parse bounds for page %d — returning full page", page_num)
         return page_png_bytes
 
     x1_xps, y1_xps, x2_xps, y2_xps = bounds
@@ -199,9 +216,8 @@ def crop_xps_scan_image(page_png_bytes: bytes, xps_path: str, dpi: int = 200) ->
     box = (max(0, x1), max(0, y1), min(w, x2), min(h, y2))
     cropped = img.crop(box)
 
-    # Auto-trim blank space (especially bottom whitespace below scan end)
     cropped = _auto_trim(cropped)
-    log.info("crop_xps_scan_image: %dx%d → %dx%d", w, h, cropped.width, cropped.height)
+    log.info("crop_xps_scan_image(page %d): %dx%d → %dx%d", page_num, w, h, cropped.width, cropped.height)
 
     buf = io.BytesIO()
     cropped.save(buf, 'PNG', optimize=True)
@@ -583,14 +599,17 @@ def render_osteo_overlay_pages(
 
     if all_three_same:
         pages = render_xps_pages(spine_xps, dpi=dpi)
-        xps_for_page = {0: spine_xps, 1: left_femur_xps, 2: right_femur_xps}
-        mapping = {0: 'spine_overlay', 1: 'left_femur_overlay', 2: 'right_femur_overlay'}
-        for idx, key in mapping.items():
+        # page_num is 1-indexed XPS page; pages[] is 0-indexed rendered list
+        for idx, (key, page_num) in enumerate([
+            ('spine_overlay',       1),
+            ('left_femur_overlay',  2),
+            ('right_femur_overlay', 3),
+        ]):
             if idx < len(pages):
-                out[key] = crop_xps_scan_image(pages[idx], xps_for_page[idx], dpi=dpi)
+                out[key] = crop_xps_scan_image(pages[idx], spine_xps, dpi=dpi, page_num=page_num)
         return out
 
-    # Separate XPS files — render each independently, take page 1 and crop
+    # Separate XPS files — each has only one page (page_num=1)
     for label, path in [
         ('spine_overlay',       spine_xps),
         ('left_femur_overlay',  left_femur_xps),
@@ -600,7 +619,7 @@ def render_osteo_overlay_pages(
             continue
         pages = render_xps_pages(path, dpi=dpi)
         if pages:
-            out[label] = crop_xps_scan_image(pages[0], path, dpi=dpi)
+            out[label] = crop_xps_scan_image(pages[0], path, dpi=dpi, page_num=1)
 
     return out
 
