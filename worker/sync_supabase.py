@@ -9,7 +9,7 @@ from datetime import datetime, date
 from typing import Optional
 
 import httpx
-from supabase import create_client, Client
+from supabase import create_client, Client, ClientOptions
 
 import config
 
@@ -17,7 +17,11 @@ log = logging.getLogger(__name__)
 
 
 def _get_client() -> Client:
-    return create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
+    return create_client(
+        config.SUPABASE_URL,
+        config.SUPABASE_KEY,
+        options=ClientOptions(postgrest_client_timeout=30),
+    )
 
 
 # ── PDF storage ───────────────────────────────────────────────────────────
