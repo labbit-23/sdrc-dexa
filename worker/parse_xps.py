@@ -121,23 +121,25 @@ def _parse_scan_bounds(xps_path: str) -> tuple[float, float, float, float] | Non
     margin_side = 8
     # OriginY is the text baseline — pull up ~18 XPS units to clear cap height + margin
     top = max(0, (title_y - 18) if title_y is not None else (by1 - 30))
-    return (max(0, bx1 - margin_side), top, bx2 + margin_side, by2)
+    # by2 = bottom of last ROI box; add 15 units so the box border itself renders fully
+    # but stops well before the sacrum/extra anatomy below the measurement region
+    return (max(0, bx1 - margin_side), top, bx2 + margin_side, by2 + 15)
 
 
 def _auto_trim(img: Image.Image, bg_threshold: int = 230, padding: int = 12) -> Image.Image:
-    """Trim near-white/background rows and columns from all four edges."""
+    """Trim near-white/background from top and sides only. Bottom is hard-cut by XPS coords."""
     gray = np.array(img.convert('L'))
     dark_rows = np.where(gray.min(axis=1) < bg_threshold)[0]
     dark_cols = np.where(gray.min(axis=0) < bg_threshold)[0]
     if len(dark_rows) == 0 or len(dark_cols) == 0:
         return img
-    r0, r1 = int(dark_rows[0]), int(dark_rows[-1])
+    r0 = int(dark_rows[0])
     c0, c1 = int(dark_cols[0]), int(dark_cols[-1])
     box = (
         max(0,          c0 - padding),
         max(0,          r0 - padding),
         min(img.width,  c1 + padding),
-        min(img.height, r1 + padding),
+        img.height,                     # bottom is already hard-cut by XPS clip by2
     )
     return img.crop(box)
 
