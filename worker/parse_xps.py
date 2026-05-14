@@ -109,9 +109,33 @@ def _parse_scan_bounds(xps_path: str) -> tuple[float, float, float, float] | Non
     return (max(0, bx1 - margin), max(0, by1 - margin), bx2 + margin, by2 + margin)
 
 
+def _auto_trim(img: Image.Image, bg_threshold: int = 230, padding: int = 12) -> Image.Image:
+    """
+    Trim near-white/background rows and columns from all four edges.
+    Keeps a small padding around the actual content.
+    """
+    gray = np.array(img.convert('L'))
+    # Rows / columns that have at least one dark pixel
+    dark_rows = np.where(gray.min(axis=1) < bg_threshold)[0]
+    dark_cols = np.where(gray.min(axis=0) < bg_threshold)[0]
+    if len(dark_rows) == 0 or len(dark_cols) == 0:
+        return img
+    r0, r1 = int(dark_rows[0]), int(dark_rows[-1])
+    c0, c1 = int(dark_cols[0]), int(dark_cols[-1])
+    box = (
+        max(0,           c0 - padding),
+        max(0,           r0 - padding),
+        min(img.width,   c1 + padding),
+        min(img.height,  r1 + padding),
+    )
+    return img.crop(box)
+
+
 def crop_xps_scan_image(page_png_bytes: bytes, xps_path: str, dpi: int = 200) -> bytes:
     """
     Crop the rendered page PNG to just the scan image region (with ROI overlays).
+    1. Use fpage clip coordinates to isolate the left scan column.
+    2. Auto-trim remaining whitespace so blank rows below the scan are removed.
     Falls back to the full page if bounds cannot be determined.
     """
     bounds = _parse_scan_bounds(xps_path)
@@ -130,7 +154,10 @@ def crop_xps_scan_image(page_png_bytes: bytes, xps_path: str, dpi: int = 200) ->
     w, h = img.size
     box = (max(0, x1), max(0, y1), min(w, x2), min(h, y2))
     cropped = img.crop(box)
-    log.info("crop_xps_scan_image: %dx%d → %dx%d (box %s)", w, h, cropped.width, cropped.height, box)
+
+    # Auto-trim blank space (especially bottom whitespace below scan end)
+    cropped = _auto_trim(cropped)
+    log.info("crop_xps_scan_image: %dx%d → %dx%d", w, h, cropped.width, cropped.height)
 
     buf = io.BytesIO()
     cropped.save(buf, 'PNG', optimize=True)
