@@ -144,6 +144,19 @@ def _parse_all_strip_bounds(xps_path: str) -> dict[str, tuple[float, float, floa
         log.info("_parse_all_strip_bounds: %s → %d strips, bounds=%s cap_y=%s",
                  region, len(boxes), result[region], local_disclaimers or None)
 
+    # Normalise both femur crops to the same pixel dimensions.
+    # The scanner geometry is fixed, so both hips should crop identically.
+    if 'left_femur' in result and 'right_femur' in result:
+        lf, rf = result['left_femur'], result['right_femur']
+        target_w = max(lf[2] - lf[0], rf[2] - rf[0])
+        target_h = max(lf[3] - lf[1], rf[3] - rf[1])
+        for key, box in (('left_femur', lf), ('right_femur', rf)):
+            cx = (box[0] + box[2]) / 2
+            cy = (box[1] + box[3]) / 2
+            result[key] = (cx - target_w / 2, cy - target_h / 2,
+                           cx + target_w / 2, cy + target_h / 2)
+        log.info("_parse_all_strip_bounds: normalised femur dims to %.1f×%.1f", target_w, target_h)
+
     return result
 
 
