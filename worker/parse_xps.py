@@ -211,19 +211,14 @@ def _is_background_row(row_rgba: np.ndarray) -> bool:
 def _auto_trim(img: Image.Image, bg_threshold: int = 230, padding: int = 12) -> Image.Image:
     """
     Trim background rows/cols from top, sides, and bottom.
-
-    Bottom trim uses a gap-detection approach: scan upward from the bottom,
-    skip any trailing background, then skip any thin text block, stopping at
-    the first gap of ≥8 background rows.  That gap separates the "Image not
-    for diagnosis" disclaimer from the actual scan content above it.
+    Handles both near-white AND the yellow GE Lunar patient-header band.
     """
     rgb = np.array(img.convert('RGB'))
     gray = rgb.mean(axis=2)
-    n_rows = rgb.shape[0]
 
-    # Top: skip rows that are pure background (white or GE yellow header)
+    # Top: skip rows that are background (white or yellow)
     r0 = 0
-    for i in range(n_rows):
+    for i in range(rgb.shape[0]):
         if not _is_background_row(rgb[i]):
             r0 = i
             break
@@ -234,35 +229,23 @@ def _auto_trim(img: Image.Image, bg_threshold: int = 230, padding: int = 12) -> 
         return img
     c0, c1 = int(dark_cols[0]), int(dark_cols[-1])
 
-    # Bottom: gap-based trim.
-    # Walk up from the bottom; the first run of ≥8 consecutive background rows
-    # is the separator between the disclaimer text and the real scan content.
-    is_bg = np.array([_is_background_row(rgb[i]) for i in range(n_rows)])
-    r1 = n_rows - 1
-    i = n_rows - 1
-    # Skip trailing background
-    while i > 0 and is_bg[i]:
-        i -= 1
-    # Now search upward for a gap of ≥8 background rows
-    GAP = 8
-    while i > 0:
-        if is_bg[i]:
-            gap_bottom = i
-            while i > 0 and is_bg[i]:
-                i -= 1
-            if gap_bottom - i >= GAP:
-                r1 = i   # scan content ends here; everything below is disclaimer
-                break
-        else:
-            i -= 1
+    # Bottom: last non-background row
+    r1 = rgb.shape[0] - 1
+    for i in range(rgb.shape[0] - 1, -1, -1):
+        if not _is_background_row(rgb[i]):
+            r1 = i
+            break
 
-    box = (
-        max(0,          c0 - padding),
-        max(0,          r0 - padding),
-        min(img.width,  c1 + padding),
-        min(img.height, r1 + padding),
-    )
-    return img.crop(box)
+    left   = max(0,          c0 - padding)
+    top    = max(0,          r0 - padding)
+    right  = min(img.width,  c1 + padding)
+    bottom = min(img.height, r1 + padding)
+
+    # Guard: never produce an invalid box
+    if right <= left or bottom <= top:
+        return img
+
+    return img.crop((left, top, right, bottom))
 
 
 def _bounds_to_png(page_png_bytes: bytes, bounds: tuple, dpi: int, label: str = '') -> bytes:
