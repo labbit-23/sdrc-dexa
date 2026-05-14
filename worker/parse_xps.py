@@ -211,19 +211,19 @@ def _is_background_row(row_rgba: np.ndarray) -> bool:
 def _auto_trim(img: Image.Image, bg_threshold: int = 230, padding: int = 12) -> Image.Image:
     """
     Trim background rows/cols from top, sides, and bottom.
-    Bottom trim uses a density heuristic: a row must have at least 8% of
-    its pixels darker than bg_threshold to count as scan content.  This
-    strips trailing disclaimer text rows ("Image not for diagnosis") which
-    are sparse (small font, mostly white) without removing the dense scan
-    image rows above them.
+
+    Bottom trim uses a gap-detection approach: scan upward from the bottom,
+    skip any trailing background, then skip any thin text block, stopping at
+    the first gap of ≥8 background rows.  That gap separates the "Image not
+    for diagnosis" disclaimer from the actual scan content above it.
     """
     rgb = np.array(img.convert('RGB'))
     gray = rgb.mean(axis=2)
-    W = rgb.shape[1]
+    n_rows = rgb.shape[0]
 
-    # Top: skip rows that are pure background (white or GE yellow)
+    # Top: skip rows that are pure background (white or GE yellow header)
     r0 = 0
-    for i in range(rgb.shape[0]):
+    for i in range(n_rows):
         if not _is_background_row(rgb[i]):
             r0 = i
             break
@@ -234,11 +234,27 @@ def _auto_trim(img: Image.Image, bg_threshold: int = 230, padding: int = 12) -> 
         return img
     c0, c1 = int(dark_cols[0]), int(dark_cols[-1])
 
-    # Bottom: last row with substantial dark content (≥8% of width).
-    # Text rows ("Image not for diagnosis") are sparse; scan rows are dense.
-    dark_per_row = (gray < bg_threshold).sum(axis=1)
-    content_rows = np.where(dark_per_row >= W * 0.08)[0]
-    r1 = int(content_rows[-1]) if len(content_rows) else rgb.shape[0] - 1
+    # Bottom: gap-based trim.
+    # Walk up from the bottom; the first run of ≥8 consecutive background rows
+    # is the separator between the disclaimer text and the real scan content.
+    is_bg = np.array([_is_background_row(rgb[i]) for i in range(n_rows)])
+    r1 = n_rows - 1
+    i = n_rows - 1
+    # Skip trailing background
+    while i > 0 and is_bg[i]:
+        i -= 1
+    # Now search upward for a gap of ≥8 background rows
+    GAP = 8
+    while i > 0:
+        if is_bg[i]:
+            gap_bottom = i
+            while i > 0 and is_bg[i]:
+                i -= 1
+            if gap_bottom - i >= GAP:
+                r1 = i   # scan content ends here; everything below is disclaimer
+                break
+        else:
+            i -= 1
 
     box = (
         max(0,          c0 - padding),
@@ -674,9 +690,8 @@ def render_osteo_overlay_pages(
             else:
                 log.warning("render_osteo_overlay_pages: no strip bounds for %s", region)
 
-        # Normalise both femur PNGs to the same pixel dimensions so they render
-        # identically in the report. Pad with white to the larger of the two
-        # (do NOT stretch) so content scale is preserved.
+        # Normalise both femur PNGs to identical pixel dimensions so CSS
+        # object-fit:contain renders them at the same visual scale.
         if 'left_femur_overlay' in out and 'right_femur_overlay' in out:
             lf_img = Image.open(io.BytesIO(out['left_femur_overlay'])).convert('RGB')
             rf_img = Image.open(io.BytesIO(out['right_femur_overlay'])).convert('RGB')
@@ -684,10 +699,7 @@ def render_osteo_overlay_pages(
             th = max(lf_img.height, rf_img.height)
             for slot, img in [('left_femur_overlay', lf_img), ('right_femur_overlay', rf_img)]:
                 if img.width != tw or img.height != th:
-                    canvas = Image.new('RGB', (tw, th), (255, 255, 255))
-                    # Paste centred horizontally, anchored to top
-                    canvas.paste(img, ((tw - img.width) // 2, 0))
-                    img = canvas
+                    img = img.resize((tw, th), Image.LANCZOS)
                 buf = io.BytesIO()
                 img.save(buf, 'PNG', optimize=True)
                 out[slot] = buf.getvalue()
