@@ -104,9 +104,17 @@ def _parse_scan_bounds(xps_path: str) -> tuple[float, float, float, float] | Non
     bx2 = max(c[2] for c in scan_clips)
     by2 = max(c[3] for c in scan_clips)
 
-    # Add a small margin (8 XPS units ≈ 1/12 inch)
-    margin = 8
-    return (max(0, bx1 - margin), max(0, by1 - margin), bx2 + margin, by2 + margin)
+    # Asymmetric margins: pull top up more to include the section title
+    # ("AP Spine Bone Density", "Left Femur Total" etc.) above the scan image
+    margin_side   = 8   # XPS units left/right
+    margin_top    = 35  # XPS units — enough to capture the title text
+    margin_bottom = 8
+    return (
+        max(0, bx1 - margin_side),
+        max(0, by1 - margin_top),
+        bx2 + margin_side,
+        by2 + margin_bottom,
+    )
 
 
 def _auto_trim(img: Image.Image, bg_threshold: int = 230, padding: int = 12) -> Image.Image:
