@@ -118,30 +118,29 @@ def _parse_scan_bounds(xps_path: str) -> tuple[float, float, float, float] | Non
             if title_y is None or y > title_y:
                 title_y = y            # take the closest title above
 
-    margin_side   = 8
-    margin_bottom = 8
+    margin_side = 8
     top = max(0, (title_y - 4) if title_y is not None else (by1 - 20))
-    return (max(0, bx1 - margin_side), top, bx2 + margin_side, by2 + margin_bottom)
+    # by2 is exactly the bottom of the last ROI box (L4 / femur total) — no extra margin
+    return (max(0, bx1 - margin_side), top, bx2 + margin_side, by2)
 
 
 def _auto_trim(img: Image.Image, bg_threshold: int = 230, padding: int = 12) -> Image.Image:
     """
-    Trim near-white/background rows and columns from all four edges.
-    Keeps a small padding around the actual content.
+    Trim near-white/background from top and sides only.
+    Bottom is left intact — the XPS clip coordinate is already the hard bottom.
     """
     gray = np.array(img.convert('L'))
-    # Rows / columns that have at least one dark pixel
     dark_rows = np.where(gray.min(axis=1) < bg_threshold)[0]
     dark_cols = np.where(gray.min(axis=0) < bg_threshold)[0]
     if len(dark_rows) == 0 or len(dark_cols) == 0:
         return img
-    r0, r1 = int(dark_rows[0]), int(dark_rows[-1])
+    r0 = int(dark_rows[0])
     c0, c1 = int(dark_cols[0]), int(dark_cols[-1])
     box = (
-        max(0,           c0 - padding),
-        max(0,           r0 - padding),
-        min(img.width,   c1 + padding),
-        min(img.height,  r1 + padding),
+        max(0,          c0 - padding),
+        max(0,          r0 - padding),
+        min(img.width,  c1 + padding),
+        img.height,                    # keep bottom as-is
     )
     return img.crop(box)
 
