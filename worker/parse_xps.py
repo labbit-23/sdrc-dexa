@@ -136,7 +136,7 @@ def _parse_all_strip_bounds(xps_path: str) -> dict[str, tuple[float, float, floa
         # Only cap if disclaimer is meaningfully below the strip top (avoids bad cap_y)
         if cap_y is not None and cap_y > by1 + 20:
             by2 = min(by2, cap_y)
-        result[region] = (max(0, bx1 - margin), max(0, by1 - 4), bx2 + margin, by2 + 2)
+        result[region] = (max(0, bx1 - margin), max(0, by1 - 18), bx2 + margin, by2 + 2)
         log.info("_parse_all_strip_bounds: %s → %d strips, bounds=%s", region, len(boxes), result[region])
 
     return result
