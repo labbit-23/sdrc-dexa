@@ -116,16 +116,24 @@ def _parse_all_strip_bounds(xps_path: str) -> dict[str, tuple[float, float, floa
                 break
 
     # Collect ALL "Image not for diagnosis" Y positions from the page.
-    # Each scan region has its own disclaimer; they must be applied per-region.
+    # GE Lunar Glyphs elements have a long Indices attribute (glyph data) between
+    # OriginY and UnicodeString, so a short lookback window misses OriginY.
+    # Instead: find the containing <Glyphs element start, then extract OriginY from it.
     all_disclaimer_ys = []
-    for m in re.finditer(r'not\s+for\s+diagnosis', fpage, re.IGNORECASE):
-        ctx = fpage[max(0, m.start() - 800) : m.start() + 200]
-        for oy in re.findall(r'OriginY="([\d.]+)"', ctx):
-            all_disclaimer_ys.append(float(oy))
+    for m in re.finditer(r'UnicodeString="[^"]*not\s+for\s+diagnosis[^"]*"', fpage, re.IGNORECASE):
+        elem_start = fpage.rfind('<Glyphs', 0, m.start())
+        if elem_start == -1:
+            elem_start = max(0, m.start() - 8000)
+        ctx = fpage[elem_start:m.start()]
+        oys = re.findall(r'OriginY="([\d.]+)"', ctx)
+        if oys:
+            all_disclaimer_ys.append(float(oys[-1]))
+    log.info("_parse_all_strip_bounds: found %d disclaimer Y positions: %s", len(all_disclaimer_ys), all_disclaimer_ys)
 
     result = {}
     left_margin  =  8   # expand left slightly
     right_margin = 20   # trim right (scale bar lives here)
+    top_margin   = 40   # enough to capture ROI triangle apex above first strip
     for region, boxes in region_boxes.items():
         if not boxes:
             continue
@@ -140,7 +148,7 @@ def _parse_all_strip_bounds(xps_path: str) -> dict[str, tuple[float, float, floa
             local_cap = min(local_disclaimers) - 2
             if local_cap > by1 + 20:
                 by2 = min(by2, local_cap)
-        result[region] = (max(0, bx1 - left_margin), max(0, by1 - 18), bx2 - right_margin, by2 + 2)
+        result[region] = (max(0, bx1 - left_margin), max(0, by1 - top_margin), bx2 - right_margin, by2 + 2)
         log.info("_parse_all_strip_bounds: %s → %d strips, bounds=%s cap_y=%s",
                  region, len(boxes), result[region], local_disclaimers or None)
 
