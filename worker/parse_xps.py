@@ -126,20 +126,45 @@ def _parse_scan_bounds(xps_path: str) -> tuple[float, float, float, float] | Non
     return (max(0, bx1 - margin_side), top, bx2 + margin_side, by2 + 15)
 
 
+def _is_background_row(row_rgba: np.ndarray) -> bool:
+    """
+    Return True if a pixel row is pure background:
+    near-white (R,G,B all ≥ 230) OR yellow header (R≥220, G≥220, B≤80).
+    """
+    r, g, b = row_rgba[:, 0], row_rgba[:, 1], row_rgba[:, 2]
+    near_white  = (r >= 230) & (g >= 230) & (b >= 230)
+    yellow_hdr  = (r >= 220) & (g >= 220) & (b <= 80)
+    background  = near_white | yellow_hdr
+    return bool(background.all())
+
+
 def _auto_trim(img: Image.Image, bg_threshold: int = 230, padding: int = 12) -> Image.Image:
-    """Trim near-white/background from top and sides only. Bottom is hard-cut by XPS coords."""
-    gray = np.array(img.convert('L'))
-    dark_rows = np.where(gray.min(axis=1) < bg_threshold)[0]
+    """
+    Trim background rows/cols from top and sides.
+    Handles both near-white AND the yellow GE Lunar patient-header band.
+    Bottom is left as-is (already hard-cut by XPS clip by2).
+    """
+    rgb = np.array(img.convert('RGB'))
+    gray = rgb.mean(axis=2)
+
+    # Top: skip rows that are background (white or yellow)
+    r0 = 0
+    for i in range(rgb.shape[0]):
+        if not _is_background_row(rgb[i]):
+            r0 = i
+            break
+
+    # Sides: columns with any dark pixel
     dark_cols = np.where(gray.min(axis=0) < bg_threshold)[0]
-    if len(dark_rows) == 0 or len(dark_cols) == 0:
+    if len(dark_cols) == 0:
         return img
-    r0 = int(dark_rows[0])
     c0, c1 = int(dark_cols[0]), int(dark_cols[-1])
+
     box = (
         max(0,          c0 - padding),
         max(0,          r0 - padding),
         min(img.width,  c1 + padding),
-        img.height,                     # bottom is already hard-cut by XPS clip by2
+        img.height,
     )
     return img.crop(box)
 
