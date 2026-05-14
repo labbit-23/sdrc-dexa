@@ -289,7 +289,7 @@ def upload_osteo_raw(
             'mrn':         mrn,
             'first_name':  patient_data.get('name', ''),
             'last_name':   patient_data.get('title', ''),
-            'dob':         dob if isinstance(dob, str) else (dob.isoformat() if dob else None),
+            'dob':         (dob or None) if isinstance(dob, str) else (dob.isoformat() if dob else None),
             'gender':      patient_data.get('gender', ''),
             'ethnicity':   patient_data.get('ethnicity', ''),
             'height_cm':   patient_data.get('height_cm') or None,
@@ -446,22 +446,16 @@ def upload_totalbody_raw(
             'mrn':         mrn,
             'first_name':  patient_data.get('name', ''),
             'last_name':   patient_data.get('title', ''),
-            'dob':         dob if isinstance(dob, str) else (dob.isoformat() if dob else None),
+            'dob':         (dob or None) if isinstance(dob, str) else (dob.isoformat() if dob else None),
             'gender':      patient_data.get('gender', ''),
             'height_cm':   patient_data.get('height_cm') or None,
             'weight_kg':   patient_data.get('weight_kg') or None,
             'physician':   patient_data.get('physician', ''),
             'updated_at':  datetime.utcnow().isoformat(),
         }
-        _n(f"  pat_row: {json.dumps(pat_row, default=str)}")
-        try:
-            r = httpx.post(f"{rest}/bmd_patients?on_conflict=pat_handle", headers=db_headers,
-                           content=json.dumps(pat_row, default=str), timeout=30)
-            _n(f"  HTTP {r.status_code}: {r.text[:200]}")
-            r.raise_for_status()
-        except Exception as e:
-            _n(f"  ERROR: {e}")
-            raise
+        r = httpx.post(f"{rest}/bmd_patients?on_conflict=pat_handle", headers=db_headers,
+                       content=json.dumps(pat_row, default=str), timeout=30)
+        r.raise_for_status()
         patient_uuid = r.json()[0]['id']
         log.info("Upserted bmd_patients: %s", patient_uuid)
         _n("  Patient record saved. Upserting scan record…")
