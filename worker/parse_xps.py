@@ -160,11 +160,18 @@ def _auto_trim(img: Image.Image, bg_threshold: int = 230, padding: int = 12) -> 
         return img
     c0, c1 = int(dark_cols[0]), int(dark_cols[-1])
 
+    # Bottom: last non-background row (removes blank below scan strips)
+    r1 = rgb.shape[0] - 1
+    for i in range(rgb.shape[0] - 1, -1, -1):
+        if not _is_background_row(rgb[i]):
+            r1 = i
+            break
+
     box = (
         max(0,          c0 - padding),
         max(0,          r0 - padding),
         min(img.width,  c1 + padding),
-        img.height,                     # bottom hard-cut by XPS by2 — don't auto-trim
+        min(img.height, r1 + padding),
     )
     return img.crop(box)
 
