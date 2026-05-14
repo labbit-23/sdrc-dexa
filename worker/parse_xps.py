@@ -115,14 +115,13 @@ def _parse_all_strip_bounds(xps_path: str) -> dict[str, tuple[float, float, floa
                 region_boxes[region].append((x, y, x + w, y + h))
                 break
 
-    # Cap bottom at "Image not for diagnosis" disclaimer to exclude GE footer.
-    # Two-step: find the disclaimer string, then find OriginY in surrounding context.
-    disclaimer_ys = []
+    # Collect ALL "Image not for diagnosis" Y positions from the page.
+    # Each scan region has its own disclaimer; they must be applied per-region.
+    all_disclaimer_ys = []
     for m in re.finditer(r'not\s+for\s+diagnosis', fpage, re.IGNORECASE):
         ctx = fpage[max(0, m.start() - 800) : m.start() + 200]
         for oy in re.findall(r'OriginY="([\d.]+)"', ctx):
-            disclaimer_ys.append(float(oy))
-    cap_y = (min(disclaimer_ys) - 2) if disclaimer_ys else None
+            all_disclaimer_ys.append(float(oy))
 
     result = {}
     margin = 8
@@ -133,11 +132,16 @@ def _parse_all_strip_bounds(xps_path: str) -> dict[str, tuple[float, float, floa
         by1 = min(b[1] for b in boxes)
         bx2 = max(b[2] for b in boxes)
         by2 = max(b[3] for b in boxes)
-        # Only cap if disclaimer is meaningfully below the strip top (avoids bad cap_y)
-        if cap_y is not None and cap_y > by1 + 20:
-            by2 = min(by2, cap_y)
+        # Find the disclaimer belonging to THIS region: Y must be below the region's
+        # top (by1) and within 300 units below the region's bottom (by2).
+        local_disclaimers = [y for y in all_disclaimer_ys if y > by1 and y < by2 + 300]
+        if local_disclaimers:
+            local_cap = min(local_disclaimers) - 2
+            if local_cap > by1 + 20:
+                by2 = min(by2, local_cap)
         result[region] = (max(0, bx1 - margin), max(0, by1 - 18), bx2 + margin, by2 + 2)
-        log.info("_parse_all_strip_bounds: %s → %d strips, bounds=%s", region, len(boxes), result[region])
+        log.info("_parse_all_strip_bounds: %s → %d strips, bounds=%s cap_y=%s",
+                 region, len(boxes), result[region], local_disclaimers or None)
 
     return result
 
