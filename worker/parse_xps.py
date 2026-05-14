@@ -124,7 +124,8 @@ def _parse_all_strip_bounds(xps_path: str) -> dict[str, tuple[float, float, floa
             all_disclaimer_ys.append(float(oy))
 
     result = {}
-    margin = 8
+    left_margin  =  8   # expand left slightly
+    right_margin = 20   # trim right (scale bar lives here)
     for region, boxes in region_boxes.items():
         if not boxes:
             continue
@@ -139,7 +140,7 @@ def _parse_all_strip_bounds(xps_path: str) -> dict[str, tuple[float, float, floa
             local_cap = min(local_disclaimers) - 2
             if local_cap > by1 + 20:
                 by2 = min(by2, local_cap)
-        result[region] = (max(0, bx1 - margin), max(0, by1 - 18), bx2 + margin, by2 + 2)
+        result[region] = (max(0, bx1 - left_margin), max(0, by1 - 18), bx2 - right_margin, by2 + 2)
         log.info("_parse_all_strip_bounds: %s → %d strips, bounds=%s cap_y=%s",
                  region, len(boxes), result[region], local_disclaimers or None)
 
