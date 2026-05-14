@@ -297,7 +297,7 @@ def upload_osteo_raw(
             'physician':   patient_data.get('physician', ''),
             'updated_at':  datetime.utcnow().isoformat(),
         }
-        r = httpx.post(f"{rest}/bmd_patients", headers=db_headers,
+        r = httpx.post(f"{rest}/bmd_patients?on_conflict=pat_handle", headers=db_headers,
                        content=json.dumps(pat_row), timeout=30)
         r.raise_for_status()
         patient_uuid = r.json()[0]['id']
@@ -322,7 +322,7 @@ def upload_osteo_raw(
             'image_paths':    image_paths,
             'raw_json':       raw_json_str,
         }
-        r = httpx.post(f"{rest}/bmd_scans", headers=db_headers,
+        r = httpx.post(f"{rest}/bmd_scans?on_conflict=scan_handle", headers=db_headers,
                        content=json.dumps(scan_row), timeout=30)
         r.raise_for_status()
         scan_uuid = r.json()[0]['id']
@@ -453,7 +453,7 @@ def upload_totalbody_raw(
             'physician':   patient_data.get('physician', ''),
             'updated_at':  datetime.utcnow().isoformat(),
         }
-        r = httpx.post(f"{rest}/bmd_patients", headers=db_headers,
+        r = httpx.post(f"{rest}/bmd_patients?on_conflict=pat_handle", headers=db_headers,
                        content=json.dumps(pat_row), timeout=30)
         r.raise_for_status()
         patient_uuid = r.json()[0]['id']
@@ -478,7 +478,7 @@ def upload_totalbody_raw(
             'image_paths':    image_paths,
             'raw_json':       raw_json_str,
         }
-        r = httpx.post(f"{rest}/bmd_scans", headers=db_headers,
+        r = httpx.post(f"{rest}/bmd_scans?on_conflict=scan_handle", headers=db_headers,
                        content=json.dumps(scan_row), timeout=30)
         r.raise_for_status()
         scan_uuid = r.json()[0]['id']
