@@ -411,16 +411,22 @@ class OsteoCollectorApp(tk.Tk):
         else:
             self._instruct_frame.pack_forget()
 
-        # Button state
+        # Button state — also update colours so disabled state is visually distinct
         if ready and self._patient:
-            self._collect_btn.config(state='normal')
-            self._set_status('Ready — click "Collect Scan Data" to upload.')
+            self._collect_btn.config(
+                state='normal', bg=TEAL, fg=WHITE, activebackground=TEAL_LT,
+            )
+            self._set_status('Ready — click to upload.')
         else:
-            self._collect_btn.config(state='disabled')
-            if missing:
-                self._set_status(f'{len(missing)} XPS file(s) missing — see instructions above.')
-            else:
+            self._collect_btn.config(
+                state='disabled', bg=MGRAY, fg='#334455', activebackground=MGRAY,
+            )
+            if not self._patient:
                 self._set_status('No patient loaded.')
+            elif not found:
+                self._set_status('No XPS files found — export from GE Lunar first.')
+            else:
+                self._set_status(f'{len(missing)} XPS file(s) missing — OK to proceed anyway.')
 
     def _load_by_mrn(self):
         mrn = self._mrn_entry.get().strip()

@@ -108,7 +108,7 @@ def tb_xps_status(
     """Return status dict for UI (mirrors collect_osteo.xps_status)."""
     found   = detect_totalbody_xps(mrn, xps_dir, scan_date)
     missing = [k for k in ('bone', 'composition') if k not in found]
-    ready   = 'bone' in found          # bone XPS is the minimum requirement
+    ready   = len(found) > 0            # any XPS found is enough to proceed
 
     human = {'bone': 'Bone Density XPS', 'composition': 'Composition XPS'}
     if not found:
