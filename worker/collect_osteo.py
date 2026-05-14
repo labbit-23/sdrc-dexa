@@ -458,15 +458,17 @@ def get_patient_by_mrn(mrn: str) -> Optional[dict]:
 
     latest = sessions[0]
     scan_dt = latest.get('scan_date')
+    mdb_scan_type = latest.get('mdb_scan_type', 'osteo')
     # find_patient() returns {'name': full_name, 'title': salutation, ...}
     name = f"{patient.get('title', '')} {patient.get('name', '')}".strip()
     status = xps_status(scan_date=scan_dt, mrn=mrn)
 
     return {
-        'mrn':        mrn,
-        'name':       name,
-        'scan_date':  scan_dt,
-        'xps_status': status,
+        'mrn':           mrn,
+        'name':          name,
+        'scan_date':     scan_dt,
+        'mdb_scan_type': mdb_scan_type,
+        'xps_status':    status,
     }
 
 
@@ -512,13 +514,16 @@ def get_latest_patient() -> Optional[dict]:
     name = f"{pat_row.get('last_name', '')} {pat_row.get('first_name', '')}".strip()
 
     # Pass mrn + scan_date so XPS matching is locked to this patient
+    sessions = parser.get_scan_sessions(pat_handle)
+    mdb_scan_type = sessions[0].get('mdb_scan_type', 'osteo') if sessions else 'osteo'
     status = xps_status(scan_date=best_dt, mrn=mrn)
 
     return {
-        'mrn':        mrn,
-        'name':       name,
-        'scan_date':  best_dt,
-        'xps_status': status,
+        'mrn':           mrn,
+        'name':          name,
+        'scan_date':     best_dt,
+        'mdb_scan_type': mdb_scan_type,
+        'xps_status':    status,
     }
 
 

@@ -306,12 +306,20 @@ class MdbParser:
         software = primary.get('acquisition_version', '').strip() or None
         filename = primary.get('filename', '').strip() or None
 
+        # Determine scan type from MDB scantypes present in this session:
+        #   scantype 10 → total body scan (full-body DXA)
+        #   scantype 0 with left+right femur → osteo (AP Spine + Dual Femur)
+        #   scantype 0 alone → spine-only osteo
+        has_tb_scantype = any(e['_scantype_int'] == 10 for e in imgs)
+        mdb_scan_type = 'total_body' if has_tb_scantype else 'osteo'
+
         session = {
             'scan_handle':    scan_handle,
             'scan_date':      scan_date,
             'scanner_serial': scanner_serial,
             'software':       software,
             'ntx_filename':   filename,
+            'mdb_scan_type':  mdb_scan_type,   # 'osteo' | 'total_body'
             'spine':          {},
             'left_femur':     {},
             'right_femur':    {},

@@ -344,14 +344,14 @@ class OsteoCollectorApp(tk.Tk):
         except Exception:
             info['_estimated_composition'] = {}
 
-        # Detect scan type: check for total body XPS first, fall back to osteo
+        # Scan type comes from MDB (authoritative) — not from XPS presence.
+        # XPS files may not be in the folder yet (old scan, not exported yet).
         mrn = info['mrn']
-        tb_found = detect_totalbody_xps(mrn=mrn, scan_date=self._scan_date)
-        if tb_found:
-            self._scan_mode = 'total_body'
+        self._scan_mode = info.get('mdb_scan_type', 'osteo')
+
+        if self._scan_mode == 'total_body':
             st = tb_xps_status(mrn=mrn, scan_date=self._scan_date)
         else:
-            self._scan_mode = 'osteo'
             st = xps_status(scan_date=self._scan_date, mrn=mrn)
         self._xps_map = st['found']
         self.after(0, lambda _st=st: self._update_xps_panel(_st))
