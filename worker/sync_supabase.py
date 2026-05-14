@@ -275,6 +275,7 @@ def upload_osteo_raw(
     if patient_data and session_data:
         db_headers = {
             'Authorization': f"Bearer {config.SUPABASE_KEY}",
+            'apikey':        config.SUPABASE_KEY,
             'Content-Type':  'application/json',
             'Prefer':        'resolution=merge-duplicates,return=representation',
         }
@@ -431,6 +432,7 @@ def upload_totalbody_raw(
     if patient_data and session_data:
         db_headers = {
             'Authorization': f"Bearer {config.SUPABASE_KEY}",
+            'apikey':        config.SUPABASE_KEY,
             'Content-Type':  'application/json',
             'Prefer':        'resolution=merge-duplicates,return=representation',
         }
