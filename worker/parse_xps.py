@@ -115,12 +115,19 @@ def _parse_all_strip_bounds(xps_path: str) -> dict[str, tuple[float, float, floa
                 region_boxes[region].append((x, y, x + w, y + h))
                 break
 
-    # Cap bottom at "Image not for diagnosis" disclaimer to exclude GE footer
+    # Cap bottom at "Image not for diagnosis" disclaimer to exclude GE footer.
+    # Try OriginY-first attribute order, then UnicodeString-first.
     disclaimer_re = re.compile(
-        r'OriginY="([\d.]+)"[^>]*UnicodeString="[^"]*not\s+for\s+diagnosis[^"]*"',
-        re.IGNORECASE,
+        r'OriginY="([\d.]+)"[^>]{0,300}?UnicodeString="[^"]*not\s+for\s+diagnosis[^"]*"'
+        r'|'
+        r'UnicodeString="[^"]*not\s+for\s+diagnosis[^"]*"[^>]{0,300}?OriginY="([\d.]+)"',
+        re.IGNORECASE | re.DOTALL,
     )
-    disclaimer_ys = [float(m.group(1)) for m in disclaimer_re.finditer(fpage)]
+    disclaimer_ys = []
+    for m in disclaimer_re.finditer(fpage):
+        y_str = m.group(1) or m.group(2)
+        if y_str:
+            disclaimer_ys.append(float(y_str))
     cap_y = (min(disclaimer_ys) - 2) if disclaimer_ys else None
 
     result = {}
@@ -132,7 +139,8 @@ def _parse_all_strip_bounds(xps_path: str) -> dict[str, tuple[float, float, floa
         by1 = min(b[1] for b in boxes)
         bx2 = max(b[2] for b in boxes)
         by2 = max(b[3] for b in boxes)
-        if cap_y is not None:
+        # Only cap if disclaimer is meaningfully below the strip top (avoids bad cap_y)
+        if cap_y is not None and cap_y > by1 + 20:
             by2 = min(by2, cap_y)
         result[region] = (max(0, bx1 - margin), max(0, by1 - 4), bx2 + margin, by2 + 2)
         log.info("_parse_all_strip_bounds: %s → %d strips, bounds=%s", region, len(boxes), result[region])
@@ -243,6 +251,9 @@ def _bounds_to_png(page_png_bytes: bytes, bounds: tuple, dpi: int, label: str = 
         min(w, int(x2_xps * scale)),
         min(h, int(y2_xps * scale)),
     )
+    if box[2] <= box[0] or box[3] <= box[1]:
+        log.warning("_bounds_to_png: invalid box %s for %s — skipping cap, using full strip height", box, label)
+        box = (box[0], box[1], max(box[0] + 1, box[2]), max(box[1] + 1, min(h, int(y2_xps * scale))))
     cropped = _auto_trim(img.crop(box))
     log.info("crop %s: %dx%d → %dx%d", label, w, h, cropped.width, cropped.height)
     buf = io.BytesIO()
