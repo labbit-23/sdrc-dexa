@@ -104,17 +104,24 @@ def _parse_scan_bounds(xps_path: str) -> tuple[float, float, float, float] | Non
     bx2 = max(c[2] for c in scan_clips)
     by2 = max(c[3] for c in scan_clips)
 
-    # Asymmetric margins: pull top up more to include the section title
-    # ("AP Spine Bone Density", "Left Femur Total" etc.) above the scan image
-    margin_side   = 8   # XPS units left/right
-    margin_top    = 35  # XPS units — enough to capture the title text
-    margin_bottom = 8
-    return (
-        max(0, bx1 - margin_side),
-        max(0, by1 - margin_top),
-        bx2 + margin_side,
-        by2 + margin_bottom,
+    # Find the section title ("AP Spine Bone Density", "Left Femur …" etc.)
+    # by locating Glyphs whose UnicodeString contains "Bone Density" or "Femur"
+    # and whose Y position is just above the clip region.
+    title_re = re.compile(
+        r'OriginY="([\d.]+)"[^>]*UnicodeString="([^"]*(?:Bone\s+Density|Femur|Composition)[^"]*)"',
+        re.IGNORECASE,
     )
+    title_y: float | None = None
+    for m in title_re.finditer(fpage):
+        y = float(m.group(1))
+        if y < by1:                    # must be above the clip region
+            if title_y is None or y > title_y:
+                title_y = y            # take the closest title above
+
+    margin_side   = 8
+    margin_bottom = 8
+    top = max(0, (title_y - 4) if title_y is not None else (by1 - 20))
+    return (max(0, bx1 - margin_side), top, bx2 + margin_side, by2 + margin_bottom)
 
 
 def _auto_trim(img: Image.Image, bg_threshold: int = 230, padding: int = 12) -> Image.Image:
