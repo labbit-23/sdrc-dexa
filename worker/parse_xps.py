@@ -210,14 +210,18 @@ def _is_background_row(row_rgba: np.ndarray) -> bool:
 
 def _auto_trim(img: Image.Image, bg_threshold: int = 230, padding: int = 12) -> Image.Image:
     """
-    Trim background rows/cols from top and sides.
-    Handles both near-white AND the yellow GE Lunar patient-header band.
-    Bottom is left as-is (already hard-cut by XPS clip by2).
+    Trim background rows/cols from top, sides, and bottom.
+    Bottom trim uses a density heuristic: a row must have at least 8% of
+    its pixels darker than bg_threshold to count as scan content.  This
+    strips trailing disclaimer text rows ("Image not for diagnosis") which
+    are sparse (small font, mostly white) without removing the dense scan
+    image rows above them.
     """
     rgb = np.array(img.convert('RGB'))
     gray = rgb.mean(axis=2)
+    W = rgb.shape[1]
 
-    # Top: skip rows that are background (white or yellow)
+    # Top: skip rows that are pure background (white or GE yellow)
     r0 = 0
     for i in range(rgb.shape[0]):
         if not _is_background_row(rgb[i]):
@@ -230,12 +234,11 @@ def _auto_trim(img: Image.Image, bg_threshold: int = 230, padding: int = 12) -> 
         return img
     c0, c1 = int(dark_cols[0]), int(dark_cols[-1])
 
-    # Bottom: last non-background row (removes blank below scan strips)
-    r1 = rgb.shape[0] - 1
-    for i in range(rgb.shape[0] - 1, -1, -1):
-        if not _is_background_row(rgb[i]):
-            r1 = i
-            break
+    # Bottom: last row with substantial dark content (≥8% of width).
+    # Text rows ("Image not for diagnosis") are sparse; scan rows are dense.
+    dark_per_row = (gray < bg_threshold).sum(axis=1)
+    content_rows = np.where(dark_per_row >= W * 0.08)[0]
+    r1 = int(content_rows[-1]) if len(content_rows) else rgb.shape[0] - 1
 
     box = (
         max(0,          c0 - padding),
@@ -672,16 +675,19 @@ def render_osteo_overlay_pages(
                 log.warning("render_osteo_overlay_pages: no strip bounds for %s", region)
 
         # Normalise both femur PNGs to the same pixel dimensions so they render
-        # identically in the report. Resize to the larger of the two, preserving
-        # each image's correctly-cropped content.
+        # identically in the report. Pad with white to the larger of the two
+        # (do NOT stretch) so content scale is preserved.
         if 'left_femur_overlay' in out and 'right_femur_overlay' in out:
-            lf_img = Image.open(io.BytesIO(out['left_femur_overlay']))
-            rf_img = Image.open(io.BytesIO(out['right_femur_overlay']))
+            lf_img = Image.open(io.BytesIO(out['left_femur_overlay'])).convert('RGB')
+            rf_img = Image.open(io.BytesIO(out['right_femur_overlay'])).convert('RGB')
             tw = max(lf_img.width,  rf_img.width)
             th = max(lf_img.height, rf_img.height)
             for slot, img in [('left_femur_overlay', lf_img), ('right_femur_overlay', rf_img)]:
                 if img.width != tw or img.height != th:
-                    img = img.resize((tw, th), Image.LANCZOS)
+                    canvas = Image.new('RGB', (tw, th), (255, 255, 255))
+                    # Paste centred horizontally, anchored to top
+                    canvas.paste(img, ((tw - img.width) // 2, 0))
+                    img = canvas
                 buf = io.BytesIO()
                 img.save(buf, 'PNG', optimize=True)
                 out[slot] = buf.getvalue()
