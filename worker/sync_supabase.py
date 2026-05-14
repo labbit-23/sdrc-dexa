@@ -270,12 +270,17 @@ def upload_osteo_raw(
     n_files = 1 + len(xps_files) + len(image_paths)
     log.info("Osteo raw upload complete: %s (%d files)", prefix, n_files)
 
-    # ── DB upserts (if patient + session data provided) ──────────────────────
+    # ── DB upserts via httpx REST (avoids supabase-py connection hangs) ─────
     patient_uuid = scan_uuid = None
     if patient_data and session_data:
-        sb = _get_client()
+        db_headers = {
+            'Authorization': f"Bearer {config.SUPABASE_KEY}",
+            'Content-Type':  'application/json',
+            'Prefer':        'resolution=merge-duplicates,return=representation',
+        }
+        rest = f"{config.SUPABASE_URL}/rest/v1"
 
-        # ── bmd_patients (upsert on pat_handle; also set mrn) ────────────────
+        # ── bmd_patients ──────────────────────────────────────────────────────
         dob = patient_data.get('dob')
         pat_row = {
             'pat_handle':  patient_data.get('pat_handle', f"mrn_{mrn}"),
@@ -291,25 +296,19 @@ def upload_osteo_raw(
             'physician':   patient_data.get('physician', ''),
             'updated_at':  datetime.utcnow().isoformat(),
         }
-        res = (
-            sb.table('bmd_patients')
-            .upsert(pat_row, on_conflict='pat_handle')
-            .execute()
-        )
-        patient_uuid = res.data[0]['id']
+        r = httpx.post(f"{rest}/bmd_patients", headers=db_headers,
+                       content=json.dumps(pat_row), timeout=30)
+        r.raise_for_status()
+        patient_uuid = r.json()[0]['id']
         log.info("Upserted bmd_patients: %s", patient_uuid)
 
         # ── bmd_scans ────────────────────────────────────────────────────────
-        # raw_json bytes are already JSON-encoded; decode to string for TEXT column.
-        # Do NOT re-parse+re-dump — that can double-encode if raw_json is a string.
         raw_json_str = raw_json.decode()
         scan_date_raw = session_data.get('scan_date', '')
-        # Convert datetime to string if needed
         if hasattr(scan_date_raw, 'strftime'):
             scan_date_str = scan_date_raw.strftime('%Y-%m-%dT%H:%M:%S')
         else:
             scan_date_str = str(scan_date_raw)
-        # scan_handle: use pat_handle + scan_date as a stable key
         scan_handle = f"{patient_data.get('pat_handle', mrn)}_{scan_date_str[:10]}"
         scan_row = {
             'patient_id':     patient_uuid,
@@ -319,18 +318,17 @@ def upload_osteo_raw(
             'software':       session_data.get('software') or config.SOFTWARE,
             'xps_filename':   session_data.get('ntx_filename') or None,
             'scan_type':      'osteo',
-            'image_paths':    image_paths,            # dict → stored as JSONB object
-            'raw_json':       raw_json_str,           # TEXT column — already JSON string
+            'image_paths':    image_paths,
+            'raw_json':       raw_json_str,
         }
-        res = (
-            sb.table('bmd_scans')
-            .upsert(scan_row, on_conflict='scan_handle')
-            .execute()
-        )
-        scan_uuid = res.data[0]['id']
+        r = httpx.post(f"{rest}/bmd_scans", headers=db_headers,
+                       content=json.dumps(scan_row), timeout=30)
+        r.raise_for_status()
+        scan_uuid = r.json()[0]['id']
         log.info("Upserted bmd_scans: %s", scan_uuid)
 
         # ── bmd_results ──────────────────────────────────────────────────────
+        sb = _get_client()
         rows = []
         def _add(region_data: dict, side):
             for site, v in region_data.items():
@@ -428,12 +426,17 @@ def upload_totalbody_raw(
     n_files = 1 + len(xps_files) + len(image_paths)
     log.info("Total-body raw upload complete: %s (%d files)", prefix, n_files)
 
-    # DB upserts
+    # DB upserts — use httpx directly (same as storage) to avoid supabase-py hangs
     patient_uuid = scan_uuid = None
     if patient_data and session_data:
-        _n("  Upserting patient record…")
-        sb = _get_client()
+        db_headers = {
+            'Authorization': f"Bearer {config.SUPABASE_KEY}",
+            'Content-Type':  'application/json',
+            'Prefer':        'resolution=merge-duplicates,return=representation',
+        }
+        rest = f"{config.SUPABASE_URL}/rest/v1"
 
+        _n("  Upserting patient record…")
         dob = patient_data.get('dob')
         pat_row = {
             'pat_handle':  patient_data.get('pat_handle', f"mrn_{mrn}"),
@@ -448,8 +451,10 @@ def upload_totalbody_raw(
             'physician':   patient_data.get('physician', ''),
             'updated_at':  datetime.utcnow().isoformat(),
         }
-        res = sb.table('bmd_patients').upsert(pat_row, on_conflict='pat_handle').execute()
-        patient_uuid = res.data[0]['id']
+        r = httpx.post(f"{rest}/bmd_patients", headers=db_headers,
+                       content=json.dumps(pat_row), timeout=30)
+        r.raise_for_status()
+        patient_uuid = r.json()[0]['id']
         log.info("Upserted bmd_patients: %s", patient_uuid)
         _n("  Patient record saved. Upserting scan record…")
 
@@ -471,8 +476,10 @@ def upload_totalbody_raw(
             'image_paths':    image_paths,
             'raw_json':       raw_json_str,
         }
-        res = sb.table('bmd_scans').upsert(scan_row, on_conflict='scan_handle').execute()
-        scan_uuid = res.data[0]['id']
+        r = httpx.post(f"{rest}/bmd_scans", headers=db_headers,
+                       content=json.dumps(scan_row), timeout=30)
+        r.raise_for_status()
+        scan_uuid = r.json()[0]['id']
         log.info("Upserted bmd_scans (total_body): %s", scan_uuid)
 
     return {
