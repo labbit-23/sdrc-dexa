@@ -119,8 +119,8 @@ def _parse_scan_bounds(xps_path: str) -> tuple[float, float, float, float] | Non
                 title_y = y            # take the closest title above
 
     margin_side = 8
-    top = max(0, (title_y - 4) if title_y is not None else (by1 - 20))
-    # by2 is exactly the bottom of the last ROI box (L4 / femur total) — no extra margin
+    # OriginY is the text baseline — pull up ~18 XPS units to clear cap height + margin
+    top = max(0, (title_y - 18) if title_y is not None else (by1 - 30))
     return (max(0, bx1 - margin_side), top, bx2 + margin_side, by2)
 
 
