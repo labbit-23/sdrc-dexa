@@ -371,6 +371,7 @@ def upload_totalbody_raw(
     png_images:   dict[str, bytes] | None = None,
     patient_data: dict | None = None,
     session_data: dict | None = None,
+    notify=None,
 ) -> dict:
     """
     Upload raw total-body data for one patient (mirrors upload_osteo_raw):
@@ -385,6 +386,7 @@ def upload_totalbody_raw(
     ts     = datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')
     bucket = 'raw-totalbody'
     prefix = f"raw-totalbody/{mrn}/{ts}"
+    _n = notify or (lambda m: log.info(m))
 
     headers_base = {"Authorization": f"Bearer {config.SUPABASE_KEY}"}
 
@@ -398,9 +400,10 @@ def upload_totalbody_raw(
         log.info("Uploaded → %s", path)
 
     # Storage uploads
+    _n(f"  Uploading raw_totalbody.json ({len(raw_json)//1024} KB)…")
     _put(f"{prefix}/raw_totalbody.json", raw_json, "application/json")
 
-    _img_key = {          # filename → image_paths key
+    _img_key = {
         'img_fat_lean.png':     'fat_lean',
         'img_fat_gradient.png': 'fat_gradient',
         'img_bone.png':         'bone',
@@ -408,12 +411,14 @@ def upload_totalbody_raw(
     }
     image_paths: dict[str, str] = {}
     for fname, data in (png_images or {}).items():
+        _n(f"  Uploading {fname} ({len(data)//1024} KB)…")
         storage_path = f"{prefix}/{fname}"
         _put(storage_path, data, "image/png")
         key = _img_key.get(fname, fname.replace('img_', '').replace('.png', ''))
         image_paths[key] = storage_path
 
     for fname, data in xps_files.items():
+        _n(f"  Uploading {fname} ({len(data)//1024} KB)…")
         _put(f"{prefix}/{fname}", data, "application/octet-stream")
 
     n_files = 1 + len(xps_files) + len(image_paths)
@@ -422,6 +427,7 @@ def upload_totalbody_raw(
     # DB upserts
     patient_uuid = scan_uuid = None
     if patient_data and session_data:
+        _n("  Upserting patient record…")
         sb = _get_client()
 
         dob = patient_data.get('dob')
@@ -441,6 +447,7 @@ def upload_totalbody_raw(
         res = sb.table('bmd_patients').upsert(pat_row, on_conflict='pat_handle').execute()
         patient_uuid = res.data[0]['id']
         log.info("Upserted bmd_patients: %s", patient_uuid)
+        _n("  Patient record saved. Upserting scan record…")
 
         raw_json_str = raw_json.decode()
         scan_date_raw = session_data.get('scan_date', '')

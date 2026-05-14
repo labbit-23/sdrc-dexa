@@ -330,6 +330,7 @@ def upload_totalbody_scan(
         png_images   = images,
         patient_data = patient_data,
         session_data = session_data,
+        notify       = notify,
     )
 
     puuid = result.get('patient_uuid')

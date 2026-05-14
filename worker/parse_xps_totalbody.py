@@ -389,10 +389,22 @@ def extract_totalbody_images(bone_xps: str, comp_xps: str = None) -> dict:
                             pass
                 return strips
 
-            if left_nums:
-                result['body_silhouette'] = _stitch_raw(_load_strips(left_nums))
-            if right_nums:
-                result['bmd_chart'] = _stitch_raw(_load_strips(right_nums))
+            left_img  = _stitch_raw(_load_strips(left_nums))  if left_nums  else None
+            right_img = _stitch_raw(_load_strips(right_nums)) if right_nums else None
+
+            # Assign by height: body silhouette (full figure) is always taller
+            # than the BMD regional bar chart.
+            if left_img and right_img:
+                if left_img.height >= right_img.height:
+                    result['body_silhouette'] = left_img
+                    result['bmd_chart']        = right_img
+                else:
+                    result['body_silhouette'] = right_img
+                    result['bmd_chart']        = left_img
+            elif left_img:
+                result['body_silhouette'] = left_img
+            elif right_img:
+                result['bmd_chart'] = right_img
 
         log.info("extract_totalbody_images: bone silhouette=%s bmd_chart=%s",
                  result.get('body_silhouette', {}) and result['body_silhouette'].size,
