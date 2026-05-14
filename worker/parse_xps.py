@@ -62,6 +62,80 @@ def render_xps_pages(xps_path: str, dpi: int = 150) -> list[bytes]:
         log.info("render_xps_pages: %d page(s) from %s", len(pages), Path(xps_path).name)
         return pages
 
+
+def _parse_scan_bounds(xps_path: str) -> tuple[float, float, float, float] | None:
+    """
+    Parse the fpage XAML to find the bounding box of the scan image region.
+
+    GE Lunar XPS layout (816×1056 XPS units, 96 Dpi native):
+      - Scan strips (ImageBrush elements): left portion of page
+      - Overlay canvases (ROI boxes): clipped to the scan image area
+      - BMD reference chart: right portion (~x > 400)
+
+    Returns (x1, y1, x2, y2) in XPS units, or None on failure.
+    Uses the clip paths of the overlay Canvas elements as the authoritative
+    scan image bounds (they're always tight around the scan region).
+    """
+    try:
+        with zipfile.ZipFile(xps_path) as z:
+            fpage = z.read("Documents/1/Pages/1.fpage").decode("utf-8", errors="replace")
+    except Exception:
+        return None
+
+    # Find all clip-path rectangles on Canvas elements:
+    #   Clip="M x1,y1 L x1,y2 x2,y2 x2,y1 z"
+    clip_re = re.compile(
+        r'<Canvas[^>]+Clip="M\s*([\d.]+),([\d.]+)\s+L\s*[\d.]+,[\d.]+\s+([\d.]+),([\d.]+)'
+    )
+    scan_clips: list[tuple[float, float, float, float]] = []
+    for m in clip_re.finditer(fpage):
+        x1, y1, x2, y2 = float(m.group(1)), float(m.group(2)), float(m.group(3)), float(m.group(4))
+        w, h = x2 - x1, y2 - y1
+        # Filter to scan-side clips (left half of page, portrait aspect ratio)
+        if x1 < 200 and w > 50 and h > w:
+            scan_clips.append((x1, y1, x2, y2))
+
+    if not scan_clips:
+        return None
+
+    # Union of all scan-side clips
+    bx1 = min(c[0] for c in scan_clips)
+    by1 = min(c[1] for c in scan_clips)
+    bx2 = max(c[2] for c in scan_clips)
+    by2 = max(c[3] for c in scan_clips)
+
+    # Add a small margin (8 XPS units ≈ 1/12 inch)
+    margin = 8
+    return (max(0, bx1 - margin), max(0, by1 - margin), bx2 + margin, by2 + margin)
+
+
+def crop_xps_scan_image(page_png_bytes: bytes, xps_path: str, dpi: int = 200) -> bytes:
+    """
+    Crop the rendered page PNG to just the scan image region (with ROI overlays).
+    Falls back to the full page if bounds cannot be determined.
+    """
+    bounds = _parse_scan_bounds(xps_path)
+    if bounds is None:
+        log.warning("crop_xps_scan_image: could not parse bounds — returning full page")
+        return page_png_bytes
+
+    x1_xps, y1_xps, x2_xps, y2_xps = bounds
+    scale = dpi / 96.0
+    x1 = int(x1_xps * scale)
+    y1 = int(y1_xps * scale)
+    x2 = int(x2_xps * scale)
+    y2 = int(y2_xps * scale)
+
+    img = Image.open(io.BytesIO(page_png_bytes))
+    w, h = img.size
+    box = (max(0, x1), max(0, y1), min(w, x2), min(h, y2))
+    cropped = img.crop(box)
+    log.info("crop_xps_scan_image: %dx%d → %dx%d (box %s)", w, h, cropped.width, cropped.height, box)
+
+    buf = io.BytesIO()
+    cropped.save(buf, 'PNG', optimize=True)
+    return buf.getvalue()
+
 # ── Text extraction ────────────────────────────────────────────────────────
 def extract_xps_text(xps_path: str) -> list[tuple[float, float, str]]:
     """Return [(x, y, text), ...] sorted by y then x."""
@@ -412,7 +486,7 @@ def render_osteo_overlay_pages(
     spine_xps: str,
     left_femur_xps: str,
     right_femur_xps: str,
-    dpi: int = 150,
+    dpi: int = 200,
 ) -> dict[str, bytes]:
     """
     Render XPS pages to PNG using mutool, preserving the ROI overlay lines
@@ -438,13 +512,14 @@ def render_osteo_overlay_pages(
 
     if all_three_same:
         pages = render_xps_pages(spine_xps, dpi=dpi)
+        xps_for_page = {0: spine_xps, 1: left_femur_xps, 2: right_femur_xps}
         mapping = {0: 'spine_overlay', 1: 'left_femur_overlay', 2: 'right_femur_overlay'}
         for idx, key in mapping.items():
             if idx < len(pages):
-                out[key] = pages[idx]
+                out[key] = crop_xps_scan_image(pages[idx], xps_for_page[idx], dpi=dpi)
         return out
 
-    # Separate XPS files — render each independently, take page 1
+    # Separate XPS files — render each independently, take page 1 and crop
     for label, path in [
         ('spine_overlay',       spine_xps),
         ('left_femur_overlay',  left_femur_xps),
@@ -454,7 +529,7 @@ def render_osteo_overlay_pages(
             continue
         pages = render_xps_pages(path, dpi=dpi)
         if pages:
-            out[label] = pages[0]   # first page is always the scan + overlays
+            out[label] = crop_xps_scan_image(pages[0], path, dpi=dpi)
 
     return out
 
