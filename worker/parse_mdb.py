@@ -57,16 +57,30 @@ SPINE_LABELS_TOTALBODY = {
 DISPLAY_SPINE = ['L1', 'L2', 'L3', 'L4', 'L1-L4']
 DISPLAY_FEMUR = ['Neck', 'Wards', 'Trochanter', 'Total']
 
-# Total-body Composition labels (verified against SDRC scanner data + XPS cross-check)
+# Composition labels — two label sets depending on scan type:
+#
+# Total-body scan (labels verified against SDRC scanner + XPS cross-check):
 #   1=Arms  2=Legs  3=Trunk  7=Total  59=Android  60=Gynoid
-#   Note: 2=Legs, 3=Trunk (not the other way round — confirmed by matching fat% to XPS -6)
+#   Values stored in grams (fat_mass=15000 → 15 kg fat)
+#
+# Osteo (AP Spine + Dual Femur) estimated composition:
+#   0=Total  1=AP Spine region  5=Android  6=Gynoid
+#   Values stored as percentage×10 (fat_mass=398.5 → 39.85% fat)
+#   Confirmed against GE Lunar DPX display for patient 20260513066
 TOTALBODY_COMP_LABELS = {
+    # True total-body scan
     1:  'Arms',
     2:  'Legs',
     3:  'Trunk',
     7:  'Total',
     59: 'Android',
     60: 'Gynoid',
+    # Osteo estimated composition (AP Spine + Femur analysis)
+    0:  'Total',     # Estimated Total Body
+    5:  'Android',   # Estimated Android region
+    6:  'Gynoid',    # Estimated Gynoid region
+    # label=1 for osteo = AP Spine estimate; overlaps with Arms above but
+    # 'Arms' is ignored in reporting — only Total/Android/Gynoid are used
 }
 
 
