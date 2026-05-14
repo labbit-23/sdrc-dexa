@@ -144,19 +144,6 @@ def _parse_all_strip_bounds(xps_path: str) -> dict[str, tuple[float, float, floa
         log.info("_parse_all_strip_bounds: %s → %d strips, bounds=%s cap_y=%s",
                  region, len(boxes), result[region], local_disclaimers or None)
 
-    # Normalise both femur crops to the same pixel dimensions.
-    # The scanner geometry is fixed, so both hips should crop identically.
-    if 'left_femur' in result and 'right_femur' in result:
-        lf, rf = result['left_femur'], result['right_femur']
-        target_w = max(lf[2] - lf[0], rf[2] - rf[0])
-        target_h = max(lf[3] - lf[1], rf[3] - rf[1])
-        for key, box in (('left_femur', lf), ('right_femur', rf)):
-            cx = (box[0] + box[2]) / 2
-            cy = (box[1] + box[3]) / 2
-            result[key] = (cx - target_w / 2, cy - target_h / 2,
-                           cx + target_w / 2, cy + target_h / 2)
-        log.info("_parse_all_strip_bounds: normalised femur dims to %.1f×%.1f", target_w, target_h)
-
     return result
 
 
@@ -675,6 +662,23 @@ def render_osteo_overlay_pages(
                 out[key] = _bounds_to_png(page_png, region_bounds[region], dpi, label=key)
             else:
                 log.warning("render_osteo_overlay_pages: no strip bounds for %s", region)
+
+        # Normalise both femur PNGs to the same pixel dimensions so they render
+        # identically in the report. Resize to the larger of the two, preserving
+        # each image's correctly-cropped content.
+        if 'left_femur_overlay' in out and 'right_femur_overlay' in out:
+            lf_img = Image.open(io.BytesIO(out['left_femur_overlay']))
+            rf_img = Image.open(io.BytesIO(out['right_femur_overlay']))
+            tw = max(lf_img.width,  rf_img.width)
+            th = max(lf_img.height, rf_img.height)
+            for slot, img in [('left_femur_overlay', lf_img), ('right_femur_overlay', rf_img)]:
+                if img.width != tw or img.height != th:
+                    img = img.resize((tw, th), Image.LANCZOS)
+                buf = io.BytesIO()
+                img.save(buf, 'PNG', optimize=True)
+                out[slot] = buf.getvalue()
+            log.info("render_osteo_overlay_pages: normalised femur PNGs to %dx%d", tw, th)
+
         return out
 
     # Separate XPS files — each has its own single page
