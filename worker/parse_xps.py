@@ -115,6 +115,14 @@ def _parse_all_strip_bounds(xps_path: str) -> dict[str, tuple[float, float, floa
                 region_boxes[region].append((x, y, x + w, y + h))
                 break
 
+    # Cap bottom at "Image not for diagnosis" disclaimer to exclude GE footer
+    disclaimer_re = re.compile(
+        r'OriginY="([\d.]+)"[^>]*UnicodeString="[^"]*not\s+for\s+diagnosis[^"]*"',
+        re.IGNORECASE,
+    )
+    disclaimer_ys = [float(m.group(1)) for m in disclaimer_re.finditer(fpage)]
+    cap_y = (min(disclaimer_ys) - 2) if disclaimer_ys else None
+
     result = {}
     margin = 8
     for region, boxes in region_boxes.items():
@@ -124,7 +132,9 @@ def _parse_all_strip_bounds(xps_path: str) -> dict[str, tuple[float, float, floa
         by1 = min(b[1] for b in boxes)
         bx2 = max(b[2] for b in boxes)
         by2 = max(b[3] for b in boxes)
-        result[region] = (max(0, bx1 - margin), max(0, by1 - 4), bx2 + margin, by2 + 4)
+        if cap_y is not None:
+            by2 = min(by2, cap_y)
+        result[region] = (max(0, bx1 - margin), max(0, by1 - 4), bx2 + margin, by2 + 2)
         log.info("_parse_all_strip_bounds: %s → %d strips, bounds=%s", region, len(boxes), result[region])
 
     return result
