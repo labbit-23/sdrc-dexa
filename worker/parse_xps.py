@@ -128,13 +128,12 @@ def _parse_scan_bounds(xps_path: str) -> tuple[float, float, float, float] | Non
 
 def _is_background_row(row_rgba: np.ndarray) -> bool:
     """
-    Return True if a pixel row is pure background:
-    near-white (R,G,B all ≥ 230) OR yellow header (R≥220, G≥220, B≤80).
+    Return True if every pixel in the row is background.
+    Catches both near-white and the GE Lunar pastel-yellow header band.
     """
-    r, g, b = row_rgba[:, 0], row_rgba[:, 1], row_rgba[:, 2]
-    near_white  = (r >= 230) & (g >= 230) & (b >= 230)
-    yellow_hdr  = (r >= 220) & (g >= 220) & (b <= 80)
-    background  = near_white | yellow_hdr
+    r, g, b = row_rgba[:, 0].astype(int), row_rgba[:, 1].astype(int), row_rgba[:, 2].astype(int)
+    # Light / pastel background: high R+G, B can be anything ≥ 150 (covers cream/yellow)
+    background = (r >= 210) & (g >= 210) & (b >= 150)
     return bool(background.all())
 
 
