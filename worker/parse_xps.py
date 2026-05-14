@@ -82,10 +82,9 @@ def _parse_scan_bounds(xps_path: str) -> tuple[float, float, float, float] | Non
     except Exception:
         return None
 
-    # Find all clip-path rectangles on Canvas elements:
-    #   Clip="M x1,y1 L x1,y2 x2,y2 x2,y1 z"
+    # Find all clip-path rectangles — match Clip="M x1,y1 L ... x2,y2 ..." anywhere
     clip_re = re.compile(
-        r'<Canvas[^>]+Clip="M\s*([\d.]+),([\d.]+)\s+L\s*[\d.]+,[\d.]+\s+([\d.]+),([\d.]+)'
+        r'Clip="M\s*([\d.]+),([\d.]+)\s+L\s*[\d.]+,[\d.]+\s+([\d.]+),([\d.]+)'
     )
     scan_clips: list[tuple[float, float, float, float]] = []
     for m in clip_re.finditer(fpage):
@@ -119,11 +118,10 @@ def _parse_scan_bounds(xps_path: str) -> tuple[float, float, float, float] | Non
                 title_y = y            # take the closest title above
 
     margin_side = 8
-    # OriginY is the text baseline — pull up ~18 XPS units to clear cap height + margin
     top = max(0, (title_y - 18) if title_y is not None else (by1 - 30))
-    # by2 = bottom of last ROI box; add 15 units so the box border itself renders fully
-    # but stops well before the sacrum/extra anatomy below the measurement region
-    return (max(0, bx1 - margin_side), top, bx2 + margin_side, by2 + 15)
+    result = (max(0, bx1 - margin_side), top, bx2 + margin_side, by2 + 15)
+    log.info("_parse_scan_bounds: clips=%d title_y=%s bounds=%s", len(scan_clips), title_y, result)
+    return result
 
 
 def _is_background_row(row_rgba: np.ndarray) -> bool:
