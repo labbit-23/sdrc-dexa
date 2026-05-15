@@ -24,6 +24,7 @@ from pathlib import Path
 
 import config
 from collect import get_recent_patients, find_xps_for_patient, upload_patient_raw
+from sync_supabase import check_scan_exists
 
 log = logging.getLogger(__name__)
 
@@ -148,9 +149,10 @@ class CollectorApp(tk.Tk):
             sd       = info.get('scan_date')
             date_str = sd.strftime('%d %b %Y  %H:%M') if sd else '—'
 
-            xps_list = list(info['xps_files']) + self._extra_xps.get(pid, [])
-            has_xps  = bool(xps_list)
-            uploaded = pid in self._uploaded
+            xps_list   = list(info['xps_files']) + self._extra_xps.get(pid, [])
+            has_xps    = bool(xps_list)
+            uploaded   = pid in self._uploaded
+            exists_db  = info.get('exists_in_db', False)
 
             # Row card
             card_bg = '#0a2a1a' if uploaded else ('#1a2f45' if has_xps else '#2a1010')
@@ -173,6 +175,11 @@ class CollectorApp(tk.Tk):
                      text=f"ID: {pid}   Scan: {date_str}",
                      bg=card_bg, fg=MGRAY,
                      font=('Helvetica', 8), anchor='w').pack(anchor='w')
+            if exists_db and not uploaded:
+                tk.Label(info_frame,
+                         text='⚠  Data already exists in Supabase — re-upload if needed',
+                         bg=card_bg, fg=AMBER,
+                         font=('Helvetica', 7, 'bold')).pack(anchor='w')
 
             # XPS status
             xps_frame = tk.Frame(row, bg=card_bg)
@@ -219,9 +226,19 @@ class CollectorApp(tk.Tk):
             self._extra_xps = {}
             count = len(self._patients)
             missing = sum(1 for p in self._patients if p['xps_missing'])
+            self._set_status(f'Found {count} patient(s) — checking Supabase for duplicates…')
+
+            for info in self._patients:
+                pid = info['patient'].get('patient_id', '')
+                sd  = info.get('scan_date')
+                date_str = sd.strftime('%Y-%m-%d') if sd else ''
+                info['exists_in_db'] = bool(date_str and check_scan_exists(pid, date_str))
+
+            duplicates = sum(1 for p in self._patients if p.get('exists_in_db'))
             self._set_status(
                 f'Found {count} patient(s) — '
-                f'{count - missing} with XPS, {missing} missing.'
+                f'{count - missing} with XPS, {missing} missing'
+                + (f', {duplicates} already in Supabase.' if duplicates else '.')
             )
         except Exception as e:
             self._set_status(f'Error reading MDB: {e}')

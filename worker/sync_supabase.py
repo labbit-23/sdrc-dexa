@@ -24,6 +24,56 @@ def _get_client() -> Client:
     )
 
 
+# ── Duplicate scan check ──────────────────────────────────────────────────
+def check_scan_exists(mrn: str, scan_date: str) -> bool:
+    """
+    Return True if a scan already exists in Supabase for this MRN on this date.
+    scan_date must be YYYY-MM-DD (date portion only — ignores time).
+    """
+    try:
+        date_str = str(scan_date)[:10]   # ensure YYYY-MM-DD
+        next_day = (
+            datetime.strptime(date_str, '%Y-%m-%d').replace(hour=23, minute=59, second=59)
+        ).strftime('%Y-%m-%dT23:59:59')
+        headers = {
+            'Authorization': f"Bearer {config.SUPABASE_KEY}",
+            'apikey':        config.SUPABASE_KEY,
+        }
+        rest = f"{config.SUPABASE_URL}/rest/v1"
+
+        # Step 1: find patient UUID by MRN
+        r = httpx.get(
+            f"{rest}/bmd_patients",
+            params={'patient_id': f'eq.{mrn}', 'select': 'id'},
+            headers=headers, timeout=10,
+        )
+        r.raise_for_status()
+        patients = r.json()
+        if not patients:
+            return False
+
+        patient_uuid = patients[0]['id']
+
+        # Step 2: look for any scan on that date (list-of-tuples allows dup keys)
+        r = httpx.get(
+            f"{rest}/bmd_scans",
+            params=[
+                ('patient_id', f'eq.{patient_uuid}'),
+                ('scan_date',  f'gte.{date_str}T00:00:00'),
+                ('scan_date',  f'lte.{next_day}'),
+                ('select',     'id'),
+                ('limit',      '1'),
+            ],
+            headers=headers, timeout=10,
+        )
+        r.raise_for_status()
+        return len(r.json()) > 0
+
+    except Exception as e:
+        log.warning("check_scan_exists(%s, %s) failed: %s", mrn, scan_date, e)
+        return False
+
+
 # ── PDF storage ───────────────────────────────────────────────────────────
 def upload_pdf(patient_id: str, scan_date: datetime, pdf_bytes: bytes) -> str:
     """Upload PDF to Supabase Storage bucket 'pdfs'. Returns public URL."""
