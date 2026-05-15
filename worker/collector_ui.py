@@ -23,7 +23,8 @@ from datetime import datetime
 from pathlib import Path
 
 import config
-from collect import get_recent_patients, find_xps_for_patient, upload_patient_raw
+from collect import (get_recent_patients, find_xps_for_patient,
+                      upload_patient_raw, get_all_patients, upload_patient_trend)
 from sync_supabase import check_scan_exists
 
 log = logging.getLogger(__name__)
@@ -120,6 +121,13 @@ class CollectorApp(tk.Tk):
             command=lambda: threading.Thread(target=self._upload_all, daemon=True).start(),
         )
         self._upload_btn.pack(side='left', padx=4, pady=8)
+
+        tk.Button(
+            btn_frame, text='🔗  Link Older Study',
+            bg=DARK, fg=PINK, activebackground='#1a2f45', activeforeground=PINK,
+            font=('Helvetica', 9), relief='flat', padx=12, pady=8,
+            command=self._open_link_dialog,
+        ).pack(side='left', padx=4, pady=8)
 
         tk.Button(
             btn_frame, text='Exit',
@@ -291,6 +299,196 @@ class CollectorApp(tk.Tk):
             self._set_status(
                 f'All done — {len(self._uploaded)} patient(s) uploaded to Supabase.'
             )
+
+
+    def _open_link_dialog(self):
+        LinkOlderStudyDialog(self)
+
+
+# ── Link Older Study dialog ───────────────────────────────────────────────────
+
+class LinkOlderStudyDialog(tk.Toplevel):
+    """
+    Shows all patients from MDB so the operator can link an older study
+    as trend data (MDB snapshot only — no XPS / images required).
+    """
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title('Link Older Study')
+        self.geometry('680x480')
+        self.resizable(False, False)
+        self.configure(bg=DARK)
+        self.transient(parent)
+        self.grab_set()
+
+        self._patients: list[dict] = []
+        self._selected: dict | None = None
+
+        self._build_ui()
+        threading.Thread(target=self._load, daemon=True).start()
+
+    def _build_ui(self):
+        # Header
+        hdr = tk.Frame(self, bg=TEAL, height=40)
+        hdr.pack(fill='x')
+        hdr.pack_propagate(False)
+        tk.Label(hdr, text='Link Older Study as Trend Data',
+                 bg=TEAL, fg=WHITE, font=('Helvetica', 12, 'bold')).pack(
+                     side='left', padx=14, pady=10)
+
+        # Instruction
+        tk.Label(self,
+                 text='Select a historical patient from MDB to link their data as a trend record.\n'
+                      'No XPS needed — only MDB data is uploaded. Confirm the patient is the same person.',
+                 bg=DARK, fg=MGRAY, font=('Helvetica', 8), justify='left').pack(
+                     anchor='w', padx=12, pady=(8, 4))
+
+        # Column headers
+        cols = tk.Frame(self, bg=DARK)
+        cols.pack(fill='x', padx=12)
+        for text, width in [('MRN', 10), ('Name', 24), ('DOB', 12), ('Gender', 8), ('Last Scan', 16)]:
+            tk.Label(cols, text=text, bg=DARK, fg=MGRAY,
+                     font=('Helvetica', 8, 'bold'), width=width, anchor='w').pack(side='left')
+
+        # Scrollable patient list
+        list_frame = tk.Frame(self, bg=DARK)
+        list_frame.pack(fill='both', expand=True, padx=12, pady=4)
+
+        self._listbox = tk.Listbox(
+            list_frame, bg='#0f2235', fg=WHITE, selectbackground=TEAL,
+            font=('Courier', 9), activestyle='none', relief='flat',
+            highlightthickness=0,
+        )
+        sb = tk.Scrollbar(list_frame, orient='vertical',
+                          command=self._listbox.yview)
+        self._listbox.configure(yscrollcommand=sb.set)
+        self._listbox.pack(side='left', fill='both', expand=True)
+        sb.pack(side='right', fill='y')
+        self._listbox.bind('<Double-Button-1>', lambda e: self._on_select())
+
+        # Status + buttons
+        self._status = tk.StringVar(value='Loading MDB…')
+        tk.Label(self, textvariable=self._status, bg=DARK, fg=MGRAY,
+                 font=('Helvetica', 8)).pack(anchor='w', padx=12)
+
+        btn_row = tk.Frame(self, bg=DARK, height=48)
+        btn_row.pack(fill='x')
+        btn_row.pack_propagate(False)
+
+        self._select_btn = tk.Button(
+            btn_row, text='Select & Confirm →',
+            bg=PINK, fg=WHITE, activebackground='#c0155d', activeforeground=WHITE,
+            font=('Helvetica', 10, 'bold'), relief='flat', padx=16, pady=8,
+            state='disabled', command=self._on_select,
+        )
+        self._select_btn.pack(side='left', padx=12, pady=8)
+
+        tk.Button(btn_row, text='Cancel', bg=DARK, fg=MGRAY, relief='flat',
+                  font=('Helvetica', 9), padx=12, pady=8,
+                  command=self.destroy).pack(side='right', padx=12, pady=8)
+
+        self._listbox.bind('<<ListboxSelect>>',
+                           lambda e: self._select_btn.config(state='normal'))
+
+    def _load(self):
+        try:
+            self._patients = get_all_patients(max_count=200)
+            self.after(0, self._populate)
+        except Exception as e:
+            self.after(0, lambda: self._status.set(f'Error reading MDB: {e}'))
+
+    def _populate(self):
+        self._listbox.delete(0, 'end')
+        for info in self._patients:
+            p   = info['patient']
+            pid = p.get('patient_id', '?')
+            name = f"{p.get('title', '')} {p.get('name', '')}".strip()
+            dob  = str(p.get('dob', '') or '')[:10]
+            gen  = (p.get('gender') or '')[:1].upper()
+            sd   = info.get('scan_date')
+            date_str = sd.strftime('%d %b %Y') if sd else '—'
+            line = f"{pid:<10}  {name:<24}  {dob:<12}  {gen:<8}  {date_str}"
+            self._listbox.insert('end', line)
+        self._status.set(f'{len(self._patients)} patient(s) found in MDB. '
+                         'Double-click or press Select to link.')
+
+    def _on_select(self):
+        sel = self._listbox.curselection()
+        if not sel:
+            return
+        info = self._patients[sel[0]]
+        p    = info['patient']
+        name = f"{p.get('title', '')} {p.get('name', '')}".strip()
+        pid  = p.get('patient_id', '?')
+        dob  = str(p.get('dob', '') or '')[:10]
+        gen  = p.get('gender', '?')
+        sd   = info.get('scan_date')
+        date_str = sd.strftime('%d %b %Y  %H:%M') if sd else '—'
+
+        msg = (
+            f"You are about to link:\n\n"
+            f"  Name:    {name}\n"
+            f"  MRN:     {pid}\n"
+            f"  DOB:     {dob}\n"
+            f"  Gender:  {gen}\n"
+            f"  Scan:    {date_str}\n\n"
+            f"Confirm this is the SAME patient as in your current system.\n"
+            f"Their MDB data will be uploaded as trend history (no images).\n\n"
+            f"Link as:"
+        )
+
+        # Custom confirm dialog with two type buttons
+        confirm = tk.Toplevel(self)
+        confirm.title('Confirm Link')
+        confirm.geometry('420x300')
+        confirm.resizable(False, False)
+        confirm.configure(bg=DARK)
+        confirm.transient(self)
+        confirm.grab_set()
+
+        tk.Label(confirm, text=msg, bg=DARK, fg=WHITE,
+                 font=('Helvetica', 9), justify='left',
+                 wraplength=380).pack(padx=18, pady=14)
+
+        btn_row = tk.Frame(confirm, bg=DARK)
+        btn_row.pack(pady=6)
+
+        def _link(scan_type):
+            confirm.destroy()
+            self.destroy()
+            threading.Thread(
+                target=self._do_upload,
+                args=(pid, scan_type),
+                daemon=True,
+            ).start()
+
+        tk.Button(btn_row, text='Bone Density (Osteo)',
+                  bg=TEAL, fg=WHITE, activebackground='#0D9498',
+                  font=('Helvetica', 10, 'bold'), relief='flat', padx=12, pady=8,
+                  command=lambda: _link('osteo_trend')).pack(side='left', padx=6)
+
+        tk.Button(btn_row, text='Total Body Composition',
+                  bg='#6a1b9a', fg=WHITE, activebackground='#4a1070',
+                  font=('Helvetica', 10, 'bold'), relief='flat', padx=12, pady=8,
+                  command=lambda: _link('total_body_trend')).pack(side='left', padx=6)
+
+        tk.Button(btn_row, text='Cancel',
+                  bg=DARK, fg=MGRAY, relief='flat',
+                  font=('Helvetica', 9), padx=10, pady=8,
+                  command=confirm.destroy).pack(side='left', padx=6)
+
+    def _do_upload(self, patient_id: str, scan_type: str):
+        try:
+            upload_patient_trend(
+                patient_id, scan_type,
+                progress_cb=lambda msg: log.info('[trend] %s', msg),
+            )
+            mb.showinfo('Linked',
+                        f'Trend data for {patient_id} linked successfully as {scan_type}.')
+        except Exception as e:
+            log.exception('Trend upload failed: %s', e)
+            mb.showerror('Upload failed', str(e))
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

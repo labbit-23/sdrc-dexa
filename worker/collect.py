@@ -166,6 +166,62 @@ def mdb_snapshot(patient_id: str) -> dict:
     }
 
 
+# ── All-patients lookup (for Link Older Study) ────────────────────────────────
+
+def get_all_patients(max_count: int = 200) -> list[dict]:
+    """
+    Return up to max_count patients from MDB, newest scan first.
+    No XPS search — used for the Link Older Study dialog.
+    """
+    parser = MdbParser(config.MDB_PATH)
+    results = []
+    seen_pids: set[str] = set()
+
+    for exam in sorted(parser._exams,
+                       key=lambda e: e.get('_acq_dt') or datetime.min,
+                       reverse=True):
+        pat_handle = exam.get('pat_handle', '')
+        pat_row = parser._patients.get(pat_handle)
+        if not pat_row:
+            continue
+        pid = pat_row.get('patient_id', '').strip()
+        if not pid or pid in seen_pids:
+            continue
+        seen_pids.add(pid)
+
+        patient  = parser._parse_patient(pat_row)
+        sessions = parser.get_scan_sessions(pat_handle)
+        session  = sessions[0] if sessions else {}
+        results.append({
+            'patient':   patient,
+            'session':   session,
+            'scan_date': exam.get('_acq_dt'),
+        })
+        if len(results) >= max_count:
+            break
+
+    return results
+
+
+def upload_patient_trend(patient_id: str, scan_type: str,
+                         progress_cb=None) -> dict:
+    """
+    Upload MDB-only snapshot for a patient as trend data (no XPS / images).
+    scan_type: 'osteo_trend' or 'total_body_trend'
+    """
+    from sync_supabase import upload_trend_scan
+    notify = progress_cb or (lambda msg: log.info(msg))
+
+    notify(f'Reading MDB for {patient_id}…')
+    snapshot  = mdb_snapshot(patient_id)
+    snap_bytes = json.dumps(snapshot, indent=2).encode()
+
+    notify('Uploading trend data to Supabase…')
+    result = upload_trend_scan(patient_id, snap_bytes, scan_type, notify)
+    notify('Done — trend data linked.')
+    return result
+
+
 # ── Image extraction from XPS ─────────────────────────────────────────────────
 
 def _extract_png_images(xps_paths: list[str],
