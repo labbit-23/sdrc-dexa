@@ -302,7 +302,12 @@ class CollectorApp(tk.Tk):
 
 
     def _open_link_dialog(self):
-        LinkOlderStudyDialog(self)
+        current_pids = {
+            info['patient'].get('patient_id', '')
+            for info in self._patients
+            if info['patient'].get('patient_id')
+        }
+        LinkOlderStudyDialog(self, current_pids=current_pids)
 
 
 # ── Link Older Study dialog ───────────────────────────────────────────────────
@@ -313,7 +318,7 @@ class LinkOlderStudyDialog(tk.Toplevel):
     as trend data (MDB snapshot only — no XPS / images required).
     """
 
-    def __init__(self, parent):
+    def __init__(self, parent, current_pids: set | None = None):
         super().__init__(parent)
         self.title('Link Older Study')
         self.geometry('680x480')
@@ -323,7 +328,8 @@ class LinkOlderStudyDialog(tk.Toplevel):
         self.grab_set()
 
         self._patients: list[dict] = []
-        self._selected: dict | None = None
+        self._listbox_items: list   = []   # parallel to listbox rows; None = separator
+        self._current_pids: set     = current_pids or set()
 
         self._build_ui()
         threading.Thread(target=self._load, daemon=True).start()
@@ -388,8 +394,7 @@ class LinkOlderStudyDialog(tk.Toplevel):
                   font=('Helvetica', 9), padx=12, pady=8,
                   command=self.destroy).pack(side='right', padx=12, pady=8)
 
-        self._listbox.bind('<<ListboxSelect>>',
-                           lambda e: self._select_btn.config(state='normal'))
+        self._listbox.bind('<<ListboxSelect>>', self._on_listbox_select)
 
     def _load(self):
         try:
@@ -400,24 +405,61 @@ class LinkOlderStudyDialog(tk.Toplevel):
 
     def _populate(self):
         self._listbox.delete(0, 'end')
-        for info in self._patients:
-            p   = info['patient']
-            pid = p.get('patient_id', '?')
+        self._listbox_items = []
+
+        matches = [i for i in self._patients
+                   if i['patient'].get('patient_id', '') in self._current_pids]
+        others  = [i for i in self._patients
+                   if i['patient'].get('patient_id', '') not in self._current_pids]
+
+        def _fmt(info):
+            p  = info['patient']
+            pid  = p.get('patient_id', '?')
             name = f"{p.get('title', '')} {p.get('name', '')}".strip()
             dob  = str(p.get('dob', '') or '')[:10]
             gen  = (p.get('gender') or '')[:1].upper()
             sd   = info.get('scan_date')
             date_str = sd.strftime('%d %b %Y') if sd else '—'
-            line = f"{pid:<10}  {name:<24}  {dob:<12}  {gen:<8}  {date_str}"
-            self._listbox.insert('end', line)
-        self._status.set(f'{len(self._patients)} patient(s) found in MDB. '
-                         'Double-click or press Select to link.')
+            return f"{pid:<10}  {name:<24}  {dob:<12}  {gen:<8}  {date_str}"
+
+        def _sep(text):
+            self._listbox.insert('end', f'  {text}')
+            self._listbox_items.append(None)
+            self._listbox.itemconfig('end', fg=TEAL,
+                                     selectbackground=DARK, selectforeground=TEAL)
+
+        if matches:
+            _sep('─── Found in current session — click to link ──────────────')
+            for info in matches:
+                self._listbox.insert('end', _fmt(info))
+                self._listbox_items.append(info)
+                self._listbox.itemconfig('end', fg='#80DEEA')
+
+        if others:
+            if matches:
+                _sep('─── All patients in MDB ───────────────────────────────────')
+            for info in others:
+                self._listbox.insert('end', _fmt(info))
+                self._listbox_items.append(info)
+
+        match_note = f'{len(matches)} quick match(es) found.  ' if matches else ''
+        self._status.set(f'{match_note}{len(self._patients)} total in MDB. '
+                         'Double-click or Select to link.')
+
+    def _on_listbox_select(self, event=None):
+        sel = self._listbox.curselection()
+        if not sel:
+            return
+        item = self._listbox_items[sel[0]] if self._listbox_items else None
+        self._select_btn.config(state='normal' if item is not None else 'disabled')
 
     def _on_select(self):
         sel = self._listbox.curselection()
         if not sel:
             return
-        info = self._patients[sel[0]]
+        info = self._listbox_items[sel[0]] if self._listbox_items else None
+        if info is None:
+            return
         p    = info['patient']
         name = f"{p.get('title', '')} {p.get('name', '')}".strip()
         pid  = p.get('patient_id', '?')
