@@ -151,11 +151,15 @@ def build_raw_totalbody_json(mrn: str, xps_map: dict[str, str]) -> dict:
     """
     Build the raw_json payload expected by computeReportData() in bmd-compute.js.
 
+    All clinical data (patient demographics, composition regions, bone density)
+    comes from the MDB. XPS files are used only for image extraction.
+
     Shape:
       {
         'mdb_snapshot':    { patients, exams, composition, densitometry, … },
-        'xps_bone':        parse_totalbody_bone() result  | None,
-        'xps_composition': parse_totalbody_composition() result | None,
+        'mdb_bone_regions': { Head, Arms, Legs, Trunk, Ribs, Pelvis, Spine, Total },
+        'xps_bone':        parse_totalbody_bone() result  | None  (legacy fallback),
+        'xps_composition': parse_totalbody_composition() result | None  (legacy fallback),
       }
     """
     log.info("Building MDB snapshot for MRN %s", mrn)
@@ -275,26 +279,28 @@ def _ge_date_to_iso(s: str) -> str:
 
 
 def _patient_from_snapshot(mrn: str, snap: dict, xps_bone=None, xps_comp=None) -> tuple[dict, dict]:
-    """Extract patient_data + session_data dicts for upload_totalbody_raw."""
+    """Extract patient_data + session_data dicts for upload_totalbody_raw.
+    All fields come from MDB snapshot. xps_bone/xps_comp params kept for
+    call-site compatibility but are no longer used.
+    """
     pat_handles = list(snap.get('patients', {}).keys())
     pat_row = snap['patients'][pat_handles[0]] if pat_handles else {}
     exams   = snap.get('exams', [])
     exam    = exams[0] if exams else {}
 
-    xps_pat = (xps_bone or {}).get('patient') or (xps_comp or {}).get('patient') or {}
-
     patient_data = {
         'pat_handle':  pat_handles[0] if pat_handles else f"mrn_{mrn}",
         'patient_id':  mrn,
-        'name':        xps_pat.get('name') or pat_row.get('first_name', ''),
-        'title':       xps_pat.get('title') or pat_row.get('last_name', ''),
+        'name':        pat_row.get('name', ''),
+        'title':       pat_row.get('title', ''),
         'dob':         pat_row.get('dob') or '',
-        'gender':      xps_pat.get('gender') or pat_row.get('gender', ''),
-        'height_cm':   xps_pat.get('height_cm') or float(pat_row.get('height') or 0),
-        'weight_kg':   xps_pat.get('weight_kg') or float(pat_row.get('weight') or 0),
-        'physician':   xps_pat.get('physician') or pat_row.get('physician', ''),
+        'gender':      pat_row.get('gender', ''),
+        'height_cm':   float(pat_row.get('height_cm') or 0),
+        'weight_kg':   float(pat_row.get('weight_kg') or 0),
+        'physician':   pat_row.get('physician', ''),
     }
-    scan_dt = _ge_date_to_iso(xps_pat.get('scan_date_str', '')) or exam.get('_acq_dt', '')
+    # Scan date from MDB acquisition timestamp (already ISO string after serialisation)
+    scan_dt = (exam.get('_acq_dt') or '')[:19]  # trim microseconds
     session_data = {
         'scan_date':      scan_dt,
         'scanner_serial': exam.get('scanner_id') or config.SCANNER_ID,
