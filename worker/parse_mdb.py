@@ -84,6 +84,20 @@ TOTALBODY_COMP_LABELS = {
 }
 
 
+# Total-body bone density region labels (Densitometry table, scantype=10)
+# Verified against XPS output and Densitometry rows for SDRC scanner.
+TOTALBODY_BONE_LABELS = {
+    0: 'Head',
+    1: 'Arms',
+    2: 'Legs',
+    3: 'Trunk',
+    4: 'Ribs',
+    5: 'Pelvis',
+    6: 'Spine',
+    7: 'Total',
+}
+
+
 # ── Excel serial date helper ───────────────────────────────────────────────
 EXCEL_EPOCH = datetime(1899, 12, 30)
 
@@ -384,6 +398,34 @@ class MdbParser:
                 'total_g': round(total_g),
                 'fat_pct': fat_pct,
             }
+        return result
+
+    def get_totalbody_bone_regions(self, img_handle: str) -> dict:
+        """
+        Return per-region bone density from Densitometry table for a total-body scan.
+        Keys: Head, Arms, Legs, Trunk, Ribs, Pelvis, Spine, Total
+        Each value: {bmd, bmc, area} — Total also has {T, Z, pYA} from Norm table.
+        """
+        dens_rows = self._densitometry.get(img_handle, [])
+        result = {}
+        for row in dens_rows:
+            label = _label_int(row.get('label'))
+            region = TOTALBODY_BONE_LABELS.get(label)
+            if region is None:
+                continue
+            norm = self._norm.get(row.get('dens_handle', ''), {})
+            entry = {
+                'bmd':  _safe_float(row.get('bmd')),
+                'bmc':  _safe_float(row.get('bmc')),
+                'area': _safe_float(row.get('area')),
+            }
+            t = _safe_float_score(norm.get('zsco_bmd_ya'))
+            z = _safe_float_score(norm.get('zsco_bmd_am'))
+            pya = _safe_float(norm.get('percent_ya'))
+            if t is not None:  entry['T']   = t
+            if z is not None:  entry['Z']   = z
+            if pya is not None: entry['pYA'] = pya
+            result[region] = entry
         return result
 
     def _get_patient_id(self, pat_handle: str) -> str:

@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Optional
 
 import config
+from parse_mdb import MdbParser
 from parse_xps import detect_xps_type
 from parse_xps_totalbody import (
     parse_totalbody_bone,
@@ -160,6 +161,20 @@ def build_raw_totalbody_json(mrn: str, xps_map: dict[str, str]) -> dict:
     log.info("Building MDB snapshot for MRN %s", mrn)
     snap = mdb_snapshot(mrn)
 
+    # Pull bone density regions directly from MDB — primary source, always available
+    mdb_bone_regions: dict = {}
+    try:
+        parser = MdbParser(config.MDB_PATH)
+        pat_handles = [ph for ph, row in parser._patients.items()
+                       if row.get('patient_id', '').strip() == mrn]
+        if pat_handles:
+            img_handle = parser.find_totalbody_img_handle(pat_handles[0])
+            if img_handle:
+                mdb_bone_regions = parser.get_totalbody_bone_regions(img_handle)
+                log.info("MDB bone regions: %d regions", len(mdb_bone_regions))
+    except Exception as e:
+        log.warning("MDB bone region extraction failed: %s", e)
+
     xps_bone = None
     xps_comp = None
 
@@ -182,6 +197,7 @@ def build_raw_totalbody_json(mrn: str, xps_map: dict[str, str]) -> dict:
 
     return {
         'mdb_snapshot':    snap,
+        'mdb_bone_regions': mdb_bone_regions,
         'xps_bone':        xps_bone,
         'xps_composition': xps_comp,
     }
@@ -252,10 +268,10 @@ def extract_tb_images(xps_map: dict[str, str], notify=None) -> dict[str, bytes]:
 # ─── Patient info for DB upsert ───────────────────────────────────────────────
 
 def _ge_date_to_iso(s: str) -> str:
-    """Convert GE Lunar MM-DD-YYYY (US format) to ISO YYYY-MM-DD; return original if unrecognised."""
+    """Convert GE Lunar DD-MM-YYYY to ISO YYYY-MM-DD; return original if unrecognised."""
     import re
     m = re.match(r'^(\d{2})-(\d{2})-(\d{4})$', s or '')
-    return f"{m.group(3)}-{m.group(1)}-{m.group(2)}" if m else s
+    return f"{m.group(3)}-{m.group(2)}-{m.group(1)}" if m else s
 
 
 def _patient_from_snapshot(mrn: str, snap: dict, xps_bone=None, xps_comp=None) -> tuple[dict, dict]:
