@@ -7,7 +7,7 @@ module.exports = {
     {
       name:        'sdrc-collector-api',
       script:      'collector_api.py',
-      interpreter: 'python3',
+      interpreter: '/opt/sdrc/sdrc-dexa-worker/worker/venv/bin/python3',
       cwd:         '/opt/sdrc/sdrc-dexa-worker/worker',
       env_production: {
         // MDB_PATH and XPS_WATCH_DIR come from the .env file in the cwd
