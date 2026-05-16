@@ -189,6 +189,10 @@ def archive_trend(patient_id: str, body: TrendBody):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class TrendBody(BaseModel):
+    scan_type: str  # 'osteo_trend' | 'total_body_trend'
+
+
 class UploadBody(BaseModel):
     xps_paths: list[str] = []
 
@@ -235,10 +239,6 @@ def upload(patient_id: str, body: UploadBody):
             'X-Accel-Buffering': 'no',
         },
     )
-
-
-class TrendBody(BaseModel):
-    scan_type: str  # 'osteo_trend' | 'total_body_trend'
 
 
 @app.post('/trend/{patient_id}')
