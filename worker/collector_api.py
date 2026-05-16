@@ -1,0 +1,171 @@
+"""
+FastAPI sidecar — HTTP wrapper around the Python worker functions.
+Runs on localhost:7437, managed by PM2 alongside the Next.js app.
+
+The Next.js /bmd/fetch page calls these endpoints via /api/collector/* proxy.
+"""
+
+import json
+import logging
+import queue
+import threading
+from datetime import datetime
+from typing import Optional
+
+import uvicorn
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+
+import config
+from collect import (
+    find_xps_for_patient,
+    get_all_patients,
+    get_recent_patients,
+    upload_patient_raw,
+    upload_patient_trend,
+)
+from sync_supabase import check_scan_exists
+
+log = logging.getLogger(__name__)
+
+app = FastAPI(title='SDRC Collector API', version='1.0')
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=['http://localhost:3000', 'http://localhost:3010',
+                   'http://127.0.0.1:3000', 'http://127.0.0.1:3010'],
+    allow_methods=['GET', 'POST'],
+    allow_headers=['*'],
+)
+
+
+# ── Serialisation ─────────────────────────────────────────────────────────────
+
+def _ser(v):
+    if isinstance(v, datetime):
+        return v.isoformat()
+    return v
+
+def _jsonify(obj):
+    if isinstance(obj, dict):
+        return {k: _jsonify(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_jsonify(i) for i in obj]
+    return _ser(obj)
+
+
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+
+@app.get('/status')
+def status():
+    return {
+        'ok':      True,
+        'mdb':     config.MDB_PATH,
+        'xps_dir': config.XPS_WATCH_DIR,
+    }
+
+
+@app.get('/recent')
+def recent(hours: int = 48):
+    """Recent patients (last N hours) + XPS status + Supabase duplicate flag."""
+    patients = get_recent_patients(hours=hours)
+    out = []
+    for info in patients:
+        pid      = info['patient'].get('patient_id', '')
+        sd       = info.get('scan_date')
+        date_str = sd.strftime('%Y-%m-%d') if sd else ''
+        exists   = bool(date_str and check_scan_exists(pid, date_str))
+        out.append({**_jsonify(info), 'exists_in_db': exists})
+    return out
+
+
+@app.get('/all')
+def all_patients(q: Optional[str] = None, max_count: int = 200):
+    """Full MDB patient list, optional MRN/name filter."""
+    patients = get_all_patients(max_count=max_count)
+    if q:
+        ql = q.lower()
+        patients = [
+            p for p in patients
+            if ql in (p['patient'].get('patient_id') or '').lower()
+            or ql in (p['patient'].get('name') or '').lower()
+        ]
+    return _jsonify(patients)
+
+
+class UploadBody(BaseModel):
+    xps_paths: list[str] = []
+
+
+@app.post('/upload/{patient_id}')
+def upload(patient_id: str, body: UploadBody):
+    """
+    Upload MDB snapshot + XPS images for one patient.
+    Returns a Server-Sent Events stream of progress messages.
+    Each event: data: {"msg": "..."} or {"done": true} or {"error": "..."}
+    """
+    xps = body.xps_paths or find_xps_for_patient(patient_id)
+
+    # Run the blocking upload in a thread; pipe progress via a queue
+    q: queue.Queue = queue.Queue()
+    _DONE = object()
+
+    def _run():
+        def _cb(msg):
+            q.put({'msg': msg})
+        try:
+            result = upload_patient_raw(patient_id, xps, progress_cb=_cb)
+            q.put({'done': True, 'result': _jsonify(result)})
+        except Exception as e:
+            log.exception('upload failed: %s', e)
+            q.put({'error': str(e)})
+        finally:
+            q.put(_DONE)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+    def _stream():
+        while True:
+            item = q.get()
+            if item is _DONE:
+                break
+            yield f'data: {json.dumps(item)}\n\n'
+
+    return StreamingResponse(
+        _stream(),
+        media_type='text/event-stream',
+        headers={
+            'Cache-Control':    'no-cache',
+            'X-Accel-Buffering': 'no',
+        },
+    )
+
+
+class TrendBody(BaseModel):
+    scan_type: str  # 'osteo_trend' | 'total_body_trend'
+
+
+@app.post('/trend/{patient_id}')
+def trend(patient_id: str, body: TrendBody):
+    """Upload MDB-only snapshot as trend data (no XPS required)."""
+    msgs: list[str] = []
+    try:
+        result = upload_patient_trend(
+            patient_id, body.scan_type,
+            progress_cb=lambda m: msgs.append(m),
+        )
+        return {'ok': True, 'messages': msgs, 'result': _jsonify(result)}
+    except Exception as e:
+        log.exception('trend upload failed: %s', e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s %(levelname)s: %(message)s',
+    )
+    uvicorn.run(app, host='127.0.0.1', port=7437, log_level='info')

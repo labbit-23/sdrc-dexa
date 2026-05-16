@@ -24,3 +24,7 @@ python-dotenv>=1.0
 
 # Windows tray app (Windows only)
 pystray>=0.19; sys_platform == "win32"
+
+# Collector API sidecar
+fastapi>=0.111
+uvicorn[standard]>=0.29
