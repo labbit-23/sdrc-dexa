@@ -13,6 +13,12 @@ MDB_PATH        = os.getenv("MDB_PATH",     r"C:\GE\Lunar\Data\lunar.mdb")
 XPS_WATCH_DIR   = os.getenv("XPS_WATCH_DIR", r"C:\GE\Lunar\Data")
 OUTPUT_PDF_DIR  = os.getenv("OUTPUT_PDF_DIR", r"C:\SDRC\Reports")
 
+# ── Archived MDB (older scanner / previous system) ────────────────────────
+# Set ARCHIVE_MDB_PATH in .env to point at a copied legacy MDB, e.g.:
+#   ARCHIVE_MDB_PATH=/mnt/ge-lunar/shared/bmd-reports/archive/lunar_old.mdb
+# Leave unset (or empty) to keep the "Link Archived Study" button disabled.
+ARCHIVE_MDB_PATH = os.getenv("ARCHIVE_MDB_PATH", "")
+
 # ── Dev/test overrides (macOS / Linux) ────────────────────────────────────
 # Set these in a .env file when running outside Windows:
 #   MDB_PATH=/Users/pav/projects/bmd/machine-data/data-2026/lunar.mdb

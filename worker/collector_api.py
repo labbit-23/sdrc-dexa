@@ -22,6 +22,7 @@ import config
 from collect import (
     find_xps_for_patient,
     get_all_patients,
+    get_all_patients_from_path,
     get_recent_patients,
     upload_patient_raw,
     upload_patient_trend,
@@ -128,6 +129,64 @@ def xps_for_patient(patient_id: str):
     """Check which XPS files exist for a given patient in the watch directory."""
     files = find_xps_for_patient(patient_id)
     return {'patient_id': patient_id, 'xps_files': files, 'found': len(files) > 0}
+
+
+# ── Archive MDB endpoints ─────────────────────────────────────────────────────
+
+def _archive_path() -> str:
+    p = (config.ARCHIVE_MDB_PATH or '').strip()
+    return p
+
+
+@app.get('/archive/status')
+def archive_status():
+    """Check whether the archive MDB is configured and readable."""
+    path = _archive_path()
+    if not path:
+        return {'available': False, 'reason': 'ARCHIVE_MDB_PATH not set in .env'}
+    from pathlib import Path as _Path
+    if not _Path(path).exists():
+        return {'available': False, 'path': path, 'reason': 'File not found at configured path'}
+    return {'available': True, 'path': path}
+
+
+@app.get('/archive/all')
+def archive_all(q: Optional[str] = None, max_count: int = 500):
+    """All patients from the archive MDB, optional name/MRN filter."""
+    path = _archive_path()
+    if not path:
+        raise HTTPException(status_code=503, detail='ARCHIVE_MDB_PATH not configured')
+    try:
+        patients = get_all_patients_from_path(path, max_count=max_count)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail={'error': str(e), 'bmd_offline': False})
+    if q:
+        ql = q.lower()
+        patients = [
+            p for p in patients
+            if ql in (p['patient'].get('patient_id') or '').lower()
+            or ql in (p['patient'].get('name') or '').lower()
+        ]
+    return _jsonify(patients)
+
+
+@app.post('/archive/trend/{patient_id}')
+def archive_trend(patient_id: str, body: TrendBody):
+    """Upload a trend record from the archive MDB (no XPS)."""
+    path = _archive_path()
+    if not path:
+        raise HTTPException(status_code=503, detail='ARCHIVE_MDB_PATH not configured')
+    msgs: list[str] = []
+    try:
+        result = upload_patient_trend(
+            patient_id, body.scan_type,
+            progress_cb=lambda m: msgs.append(m),
+            mdb_path=path,
+        )
+        return {'ok': True, 'messages': msgs, 'result': _jsonify(result)}
+    except Exception as e:
+        log.exception('archive trend upload failed: %s', e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 class UploadBody(BaseModel):

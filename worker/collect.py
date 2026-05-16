@@ -106,12 +106,13 @@ def find_xps_for_patient(patient_id: str,
 
 # ── MDB snapshot for one patient ──────────────────────────────────────────────
 
-def mdb_snapshot(patient_id: str) -> dict:
+def mdb_snapshot(patient_id: str, mdb_path: str = '') -> dict:
     """
     Extract a JSON-serialisable snapshot of MDB data for one patient.
     Includes all patient rows, all exams, all composition and densitometry rows.
+    Pass mdb_path to read from an alternative MDB (e.g. archive).
     """
-    parser = MdbParser(config.MDB_PATH)
+    parser = MdbParser(mdb_path or config.MDB_PATH)
 
     def _ser(v):
         if isinstance(v, datetime):
@@ -168,6 +169,41 @@ def mdb_snapshot(patient_id: str) -> dict:
 
 # ── All-patients lookup (for Link Older Study) ────────────────────────────────
 
+def get_all_patients_from_path(mdb_path: str, max_count: int = 500) -> list[dict]:
+    """
+    Same as get_all_patients() but reads from an explicit MDB path.
+    Used for the archive MDB feature.
+    """
+    parser = MdbParser(mdb_path)
+    results = []
+    seen_pids: set[str] = set()
+
+    for exam in sorted(parser._exams,
+                       key=lambda e: e.get('_acq_dt') or datetime.min,
+                       reverse=True):
+        pat_handle = exam.get('pat_handle', '')
+        pat_row = parser._patients.get(pat_handle)
+        if not pat_row:
+            continue
+        pid = pat_row.get('patient_id', '').strip()
+        if not pid or pid in seen_pids:
+            continue
+        seen_pids.add(pid)
+
+        patient  = parser._parse_patient(pat_row)
+        sessions = parser.get_scan_sessions(pat_handle)
+        session  = sessions[0] if sessions else {}
+        results.append({
+            'patient':   patient,
+            'session':   session,
+            'scan_date': exam.get('_acq_dt'),
+        })
+        if len(results) >= max_count:
+            break
+
+    return results
+
+
 def get_all_patients(max_count: int = 200) -> list[dict]:
     """
     Return up to max_count patients from MDB, newest scan first.
@@ -204,16 +240,17 @@ def get_all_patients(max_count: int = 200) -> list[dict]:
 
 
 def upload_patient_trend(patient_id: str, scan_type: str,
-                         progress_cb=None) -> dict:
+                         progress_cb=None, mdb_path: str = '') -> dict:
     """
     Upload MDB-only snapshot for a patient as trend data (no XPS / images).
     scan_type: 'osteo_trend' or 'total_body_trend'
+    Pass mdb_path to read from an alternative MDB (e.g. archive).
     """
     from sync_supabase import upload_trend_scan
     notify = progress_cb or (lambda msg: log.info(msg))
 
     notify(f'Reading MDB for {patient_id}…')
-    snapshot  = mdb_snapshot(patient_id)
+    snapshot   = mdb_snapshot(patient_id, mdb_path=mdb_path)
     snap_bytes = json.dumps(snapshot, indent=2).encode()
 
     notify('Uploading trend data to Supabase…')
