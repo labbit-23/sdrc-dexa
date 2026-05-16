@@ -131,6 +131,14 @@ def xps_for_patient(patient_id: str):
     return {'patient_id': patient_id, 'xps_files': files, 'found': len(files) > 0}
 
 
+class TrendBody(BaseModel):
+    scan_type: str  # 'osteo_trend' | 'total_body_trend'
+
+
+class UploadBody(BaseModel):
+    xps_paths: list[str] = []
+
+
 # ── Archive MDB endpoints ─────────────────────────────────────────────────────
 
 def _archive_path() -> str:
@@ -187,14 +195,6 @@ def archive_trend(patient_id: str, body: TrendBody):
     except Exception as e:
         log.exception('archive trend upload failed: %s', e)
         raise HTTPException(status_code=500, detail=str(e))
-
-
-class TrendBody(BaseModel):
-    scan_type: str  # 'osteo_trend' | 'total_body_trend'
-
-
-class UploadBody(BaseModel):
-    xps_paths: list[str] = []
 
 
 @app.post('/upload/{patient_id}')
