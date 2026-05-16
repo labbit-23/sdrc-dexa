@@ -71,6 +71,31 @@ def check_scan_exists(mrn: str, scan_date: str) -> bool:
 
     except Exception as e:
         log.warning("check_scan_exists(%s, %s) failed: %s", mrn, scan_date, e)
+
+
+def get_uploaded_mrns() -> set[str]:
+    """
+    Return the set of all patient MRNs (patient_id values) already in Supabase.
+    Single REST call — used by the Browse MDB modal to mark uploaded patients.
+    """
+    try:
+        headers = {
+            'Authorization': f"Bearer {config.SUPABASE_KEY}",
+            'apikey':        config.SUPABASE_KEY,
+            'Range-Unit':    'items',
+            'Prefer':        'count=none',
+        }
+        rest = f"{config.SUPABASE_URL}/rest/v1"
+        r = httpx.get(
+            f"{rest}/bmd_patients",
+            params={'select': 'patient_id', 'patient_id': 'not.is.null'},
+            headers=headers, timeout=15,
+        )
+        r.raise_for_status()
+        return {row['patient_id'] for row in r.json() if row.get('patient_id')}
+    except Exception as e:
+        log.warning("get_uploaded_mrns failed: %s", e)
+        return set()
         return False
 
 

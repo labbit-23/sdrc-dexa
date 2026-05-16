@@ -26,7 +26,7 @@ from collect import (
     upload_patient_raw,
     upload_patient_trend,
 )
-from sync_supabase import check_scan_exists
+from sync_supabase import check_scan_exists, get_uploaded_mrns
 
 log = logging.getLogger(__name__)
 
@@ -112,6 +112,22 @@ def all_patients(q: Optional[str] = None, max_count: int = 200):
             or ql in (p['patient'].get('name') or '').lower()
         ]
     return _jsonify(patients)
+
+
+@app.get('/db-mrns')
+def db_mrns():
+    """Return all patient MRNs already uploaded to Supabase. Single batch call."""
+    try:
+        return {'mrns': list(get_uploaded_mrns())}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get('/xps/{patient_id}')
+def xps_for_patient(patient_id: str):
+    """Check which XPS files exist for a given patient in the watch directory."""
+    files = find_xps_for_patient(patient_id)
+    return {'patient_id': patient_id, 'xps_files': files, 'found': len(files) > 0}
 
 
 class UploadBody(BaseModel):
