@@ -66,10 +66,27 @@ def status():
     }
 
 
+def _mdb_error(e: Exception):
+    msg = str(e)
+    # CIFS/network mount failures surface as file-not-found or permission errors
+    bmd_offline = any(k in msg.lower() for k in (
+        'no such file', 'permission denied', 'transport endpoint',
+        'stale file handle', 'connection', 'network', 'mdb', 'odbc',
+    ))
+    detail = (
+        'Cannot reach BMD PC — check that it is turned on and connected to the network.'
+        if bmd_offline else msg
+    )
+    raise HTTPException(status_code=503, detail={'error': detail, 'bmd_offline': bmd_offline})
+
+
 @app.get('/recent')
 def recent(hours: int = 48):
     """Recent patients (last N hours) + XPS status + Supabase duplicate flag."""
-    patients = get_recent_patients(hours=hours)
+    try:
+        patients = get_recent_patients(hours=hours)
+    except Exception as e:
+        _mdb_error(e)
     out = []
     for info in patients:
         pid      = info['patient'].get('patient_id', '')
@@ -83,7 +100,10 @@ def recent(hours: int = 48):
 @app.get('/all')
 def all_patients(q: Optional[str] = None, max_count: int = 200):
     """Full MDB patient list, optional MRN/name filter."""
-    patients = get_all_patients(max_count=max_count)
+    try:
+        patients = get_all_patients(max_count=max_count)
+    except Exception as e:
+        _mdb_error(e)
     if q:
         ql = q.lower()
         patients = [
