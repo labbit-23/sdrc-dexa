@@ -678,17 +678,25 @@ def render_osteo_overlay_pages(
         return buf.getvalue()
 
     if dual_femur_only:
-        # Dual femur XPS: both hips stacked vertically on one page.
-        # Top half = left femur, bottom half = right femur.
+        # Dual femur XPS: no spine, so the two femurs shift into the spine
+        # and left_femur strip slots. _parse_all_strip_bounds returns
+        # {'spine': ..., 'left_femur': ...}; spine slot = left femur image,
+        # left_femur slot = right femur image (top→bottom page order).
         pages = render_xps_pages(left_femur_xps, dpi=dpi)
         if not pages:
             return out
-        full = Image.open(io.BytesIO(pages[0])).convert('RGB')
-        mid = full.height // 2
-        lf_img = full.crop((0, 0, full.width, mid))
-        rf_img = full.crop((0, mid, full.width, full.height))
-        out['left_femur_overlay']  = _femur_png(lf_img)
-        out['right_femur_overlay'] = _femur_png(rf_img)
+        region_bounds = _parse_all_strip_bounds(left_femur_xps)
+        slot_map = [
+            ('spine',       'left_femur_overlay'),
+            ('left_femur',  'right_femur_overlay'),
+        ]
+        for region, key in slot_map:
+            if region in region_bounds:
+                raw = _bounds_to_png(pages[0], region_bounds[region], dpi, label=key)
+                img = Image.open(io.BytesIO(raw)).convert('RGB')
+                out[key] = _femur_png(img)
+            else:
+                log.warning("render_osteo_overlay_pages: no strip bounds for %s in dual-femur XPS", region)
         return out
 
     if all_three_same:
