@@ -214,7 +214,32 @@ def upload(patient_id: str, body: UploadBody):
         def _cb(msg):
             q.put({'msg': msg})
         try:
-            result = upload_patient_raw(patient_id, xps, progress_cb=_cb)
+            from parse_xps import detect_xps_type
+            tb_types = {'totalbody_bone', 'totalbody_composition', 'totalbody_narrative'}
+            types = [detect_xps_type(p) for p in xps]
+            is_totalbody = any(t in tb_types for t in types)
+
+            if is_totalbody:
+                from collect_totalbody import upload_totalbody_scan
+                xps_map: dict[str, str] = {}
+                for p, t in zip(xps, types):
+                    if t == 'totalbody_bone' and 'bone' not in xps_map:
+                        xps_map['bone'] = p
+                    elif t in ('totalbody_composition', 'totalbody_narrative') and 'composition' not in xps_map:
+                        xps_map['composition'] = p
+                result = upload_totalbody_scan(patient_id, xps_map, progress_cb=_cb)
+            else:
+                from collect_osteo import upload_osteo_scan, _classify_xps
+                xps_map = {}
+                for p in xps:
+                    label = _classify_xps(p)
+                    if label == 'combined':
+                        xps_map = {'spine': p, 'left_femur': p, 'right_femur': p}
+                        break
+                    elif label in ('spine', 'left_femur', 'right_femur'):
+                        xps_map[label] = p
+                result = upload_osteo_scan(patient_id, xps_map, progress_cb=_cb)
+
             q.put({'done': True, 'result': _jsonify(result)})
         except Exception as e:
             log.exception('upload failed: %s', e)
