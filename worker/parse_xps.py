@@ -678,35 +678,17 @@ def render_osteo_overlay_pages(
         return buf.getvalue()
 
     if dual_femur_only:
-        # Dual femur XPS: left and right in the same file, no spine.
-        # Render once, split by strip bounds — same approach as combined.
+        # Dual femur XPS: both hips stacked vertically on one page.
+        # Top half = left femur, bottom half = right femur.
         pages = render_xps_pages(left_femur_xps, dpi=dpi)
         if not pages:
             return out
-        region_bounds = _parse_all_strip_bounds(left_femur_xps)
-        for region, key in [
-            ('left_femur',  'left_femur_overlay'),
-            ('right_femur', 'right_femur_overlay'),
-        ]:
-            if region in region_bounds:
-                raw = _bounds_to_png(pages[0], region_bounds[region], dpi, label=key)
-                img = Image.open(io.BytesIO(raw)).convert('RGB')
-                out[key] = _femur_png(img)
-            else:
-                log.warning("render_osteo_overlay_pages: no strip bounds for %s", region)
-        if 'left_femur_overlay' in out and 'right_femur_overlay' in out:
-            lf_img = Image.open(io.BytesIO(out['left_femur_overlay'])).convert('RGB')
-            rf_img = Image.open(io.BytesIO(out['right_femur_overlay'])).convert('RGB')
-            tw = max(lf_img.width, rf_img.width)
-            th = max(lf_img.height, rf_img.height)
-            for slot, img in [('left_femur_overlay', lf_img), ('right_femur_overlay', rf_img)]:
-                if img.width != tw or img.height != th:
-                    canvas = Image.new('RGB', (tw, th), (255, 255, 255))
-                    canvas.paste(img, ((tw - img.width) // 2, 0))
-                    img = canvas
-                buf = io.BytesIO()
-                img.save(buf, 'PNG', optimize=True)
-                out[slot] = buf.getvalue()
+        full = Image.open(io.BytesIO(pages[0])).convert('RGB')
+        mid = full.height // 2
+        lf_img = full.crop((0, 0, full.width, mid))
+        rf_img = full.crop((0, mid, full.width, full.height))
+        out['left_femur_overlay']  = _femur_png(lf_img)
+        out['right_femur_overlay'] = _femur_png(rf_img)
         return out
 
     if all_three_same:
