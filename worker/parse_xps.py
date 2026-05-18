@@ -678,25 +678,38 @@ def render_osteo_overlay_pages(
         return buf.getvalue()
 
     if dual_femur_only:
-        # Dual femur XPS: no spine, so the two femurs shift into the spine
-        # and left_femur strip slots. _parse_all_strip_bounds returns
-        # {'spine': ..., 'left_femur': ...}; spine slot = left femur image,
-        # left_femur slot = right femur image (top→bottom page order).
+        # Dual femur XPS: both hips stacked vertically on one page, separated
+        # by a white gap band ("Image not for diagnosis" text).
+        # Find that gap by scanning for rows that are almost entirely white,
+        # then split at the centre of the gap.
         pages = render_xps_pages(left_femur_xps, dpi=dpi)
         if not pages:
             return out
-        region_bounds = _parse_all_strip_bounds(left_femur_xps)
-        slot_map = [
-            ('spine',       'left_femur_overlay'),
-            ('left_femur',  'right_femur_overlay'),
-        ]
-        for region, key in slot_map:
-            if region in region_bounds:
-                raw = _bounds_to_png(pages[0], region_bounds[region], dpi, label=key)
-                img = Image.open(io.BytesIO(raw)).convert('RGB')
-                out[key] = _femur_png(img)
+        full = Image.open(io.BytesIO(pages[0])).convert('RGB')
+        arr  = np.array(full.convert('L'), dtype=np.float32)
+        white_rows = (arr > 240).mean(axis=1) > 0.95  # rows that are ≥95% white
+        # Find the largest contiguous white band in the middle third of the page
+        h = full.height
+        search_start = h // 3
+        search_end   = (2 * h) // 3
+        band_start = band_end = None
+        best_len = 0
+        i = search_start
+        while i < search_end:
+            if white_rows[i]:
+                j = i
+                while j < search_end and white_rows[j]:
+                    j += 1
+                if j - i > best_len:
+                    best_len = j - i
+                    band_start, band_end = i, j
+                i = j
             else:
-                log.warning("render_osteo_overlay_pages: no strip bounds for %s in dual-femur XPS", region)
+                i += 1
+        split = (band_start + band_end) // 2 if band_start is not None else h // 2
+        log.info("dual_femur split row: %d (white band %s–%s)", split, band_start, band_end)
+        out['left_femur_overlay']  = _femur_png(full.crop((0, 0, full.width, split)))
+        out['right_femur_overlay'] = _femur_png(full.crop((0, split, full.width, full.height)))
         return out
 
     if all_three_same:
