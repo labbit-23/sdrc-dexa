@@ -157,10 +157,18 @@ def _parse_all_strip_bounds(xps_path: str) -> dict[str, tuple[float, float, floa
 
 def _parse_dual_femur_bounds(xps_path: str) -> dict[str, tuple[float, float, float, float]]:
     """
-    For a dual-femur-only XPS: read ALL ImageBrush strip Viewports, then split
-    them into two groups by Y centroid (upper = left femur, lower = right femur).
-    Returns {'left_femur': (x1,y1,x2,y2), 'right_femur': (x1,y1,x2,y2)} in XPS units.
+    Parse crop bounds for a dual-femur-only XPS.
+
+    Verified strip assignments for GE Lunar dual-femur XPS (39083.xps):
+      Strips  1– 8  → left_femur   (Y ≈ 253–365)
+      Strips  9–17  → right_femur  (Y ≈ 497–625)
+      Strip  18     → colour-scale bar (excluded)
     """
+    _STRIP_REGIONS = {
+        'left_femur':  range(1, 9),
+        'right_femur': range(9, 18),
+    }
+
     try:
         with zipfile.ZipFile(xps_path) as z:
             fpage = z.read("Documents/1/Pages/1.fpage").decode("utf-8", errors="replace")
@@ -174,39 +182,35 @@ def _parse_dual_femur_bounds(xps_path: str) -> dict[str, tuple[float, float, flo
         re.IGNORECASE | re.DOTALL,
     )
 
-    all_boxes: list[tuple[float, float, float, float]] = []
+    region_boxes: dict[str, list[tuple[float, float, float, float]]] = {k: [] for k in _STRIP_REGIONS}
     for m in strip_re.finditer(fpage):
         if m.group(1):
+            num = int(m.group(1))
             x, y, w, h = float(m.group(2)), float(m.group(3)), float(m.group(4)), float(m.group(5))
         else:
+            num = int(m.group(10))
             x, y, w, h = float(m.group(6)), float(m.group(7)), float(m.group(8)), float(m.group(9))
         if w < 5 or h < 2:
             continue
-        all_boxes.append((x, y, x + w, y + h))
-
-    if not all_boxes:
-        return {}
-
-    # Split by Y centroid of each strip: upper half → left femur, lower half → right femur
-    ys = sorted(set(round(b[1]) for b in all_boxes))
-    y_mid = (min(ys) + max(ys)) / 2
-    top_boxes    = [b for b in all_boxes if b[1] <= y_mid]
-    bottom_boxes = [b for b in all_boxes if b[1] >  y_mid]
+        for region, nums in _STRIP_REGIONS.items():
+            if num in nums:
+                region_boxes[region].append((x, y, x + w, y + h))
+                break
 
     left_margin  =  8
     right_margin = 20
     top_margin   = 40
 
     result = {}
-    for key, boxes in [('left_femur', top_boxes), ('right_femur', bottom_boxes)]:
+    for region, boxes in region_boxes.items():
         if not boxes:
             continue
         x1 = min(b[0] for b in boxes)
         y1 = min(b[1] for b in boxes)
         x2 = max(b[2] for b in boxes)
         y2 = max(b[3] for b in boxes)
-        result[key] = (max(0, x1 - left_margin), max(0, y1 - top_margin), x2 - right_margin, y2 + 2)
-        log.info("_parse_dual_femur_bounds: %s → %d strips, bounds=%s", key, len(boxes), result[key])
+        result[region] = (max(0, x1 - left_margin), max(0, y1 - top_margin), x2 - right_margin, y2 + 2)
+        log.info("_parse_dual_femur_bounds: %s → %d strips, bounds=%s", region, len(boxes), result[region])
 
     return result
 
