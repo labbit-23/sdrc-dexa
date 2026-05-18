@@ -155,6 +155,62 @@ def _parse_all_strip_bounds(xps_path: str) -> dict[str, tuple[float, float, floa
     return result
 
 
+def _parse_dual_femur_bounds(xps_path: str) -> dict[str, tuple[float, float, float, float]]:
+    """
+    For a dual-femur-only XPS: read ALL ImageBrush strip Viewports, then split
+    them into two groups by Y centroid (upper = left femur, lower = right femur).
+    Returns {'left_femur': (x1,y1,x2,y2), 'right_femur': (x1,y1,x2,y2)} in XPS units.
+    """
+    try:
+        with zipfile.ZipFile(xps_path) as z:
+            fpage = z.read("Documents/1/Pages/1.fpage").decode("utf-8", errors="replace")
+    except Exception:
+        return {}
+
+    strip_re = re.compile(
+        r'ImageSource="[^"]*Images/(\d+)\.PNG"[^/]*?Viewport="([\d.]+),([\d.]+),([\d.]+),([\d.]+)"'
+        r'|'
+        r'Viewport="([\d.]+),([\d.]+),([\d.]+),([\d.]+)"[^/]*?ImageSource="[^"]*Images/(\d+)\.PNG"',
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    all_boxes: list[tuple[float, float, float, float]] = []
+    for m in strip_re.finditer(fpage):
+        if m.group(1):
+            x, y, w, h = float(m.group(2)), float(m.group(3)), float(m.group(4)), float(m.group(5))
+        else:
+            x, y, w, h = float(m.group(6)), float(m.group(7)), float(m.group(8)), float(m.group(9))
+        if w < 5 or h < 2:
+            continue
+        all_boxes.append((x, y, x + w, y + h))
+
+    if not all_boxes:
+        return {}
+
+    # Split by Y centroid of each strip: upper half → left femur, lower half → right femur
+    ys = sorted(set(round(b[1]) for b in all_boxes))
+    y_mid = (min(ys) + max(ys)) / 2
+    top_boxes    = [b for b in all_boxes if b[1] <= y_mid]
+    bottom_boxes = [b for b in all_boxes if b[1] >  y_mid]
+
+    left_margin  =  8
+    right_margin = 20
+    top_margin   = 40
+
+    result = {}
+    for key, boxes in [('left_femur', top_boxes), ('right_femur', bottom_boxes)]:
+        if not boxes:
+            continue
+        x1 = min(b[0] for b in boxes)
+        y1 = min(b[1] for b in boxes)
+        x2 = max(b[2] for b in boxes)
+        y2 = max(b[3] for b in boxes)
+        result[key] = (max(0, x1 - left_margin), max(0, y1 - top_margin), x2 - right_margin, y2 + 2)
+        log.info("_parse_dual_femur_bounds: %s → %d strips, bounds=%s", key, len(boxes), result[key])
+
+    return result
+
+
 def _parse_scan_bounds(xps_path: str) -> tuple[float, float, float, float] | None:
     """
     Return a single crop bound covering all scan strips on page 1.
@@ -678,38 +734,19 @@ def render_osteo_overlay_pages(
         return buf.getvalue()
 
     if dual_femur_only:
-        # Dual femur XPS: both hips stacked vertically on one page, separated
-        # by a white gap band ("Image not for diagnosis" text).
-        # Find that gap by scanning for rows that are almost entirely white,
-        # then split at the centre of the gap.
+        # Dual femur XPS: read actual ImageBrush Viewport bounds from the XPS XML,
+        # split strips by Y centroid into top (left femur) and bottom (right femur).
         pages = render_xps_pages(left_femur_xps, dpi=dpi)
         if not pages:
             return out
-        full = Image.open(io.BytesIO(pages[0])).convert('RGB')
-        arr  = np.array(full.convert('L'), dtype=np.float32)
-        white_rows = (arr > 240).mean(axis=1) > 0.95  # rows that are ≥95% white
-        # Find the largest contiguous white band in the middle third of the page
-        h = full.height
-        search_start = h // 3
-        search_end   = (2 * h) // 3
-        band_start = band_end = None
-        best_len = 0
-        i = search_start
-        while i < search_end:
-            if white_rows[i]:
-                j = i
-                while j < search_end and white_rows[j]:
-                    j += 1
-                if j - i > best_len:
-                    best_len = j - i
-                    band_start, band_end = i, j
-                i = j
+        region_bounds = _parse_dual_femur_bounds(left_femur_xps)
+        for region, key in [('left_femur', 'left_femur_overlay'), ('right_femur', 'right_femur_overlay')]:
+            if region in region_bounds:
+                raw = _bounds_to_png(pages[0], region_bounds[region], dpi, label=key)
+                img = Image.open(io.BytesIO(raw)).convert('RGB')
+                out[key] = _femur_png(img)
             else:
-                i += 1
-        split = (band_start + band_end) // 2 if band_start is not None else h // 2
-        log.info("dual_femur split row: %d (white band %s–%s)", split, band_start, band_end)
-        out['left_femur_overlay']  = _femur_png(full.crop((0, 0, full.width, split)))
-        out['right_femur_overlay'] = _femur_png(full.crop((0, split, full.width, full.height)))
+                log.warning("render_osteo_overlay_pages: no bounds for %s in dual-femur XPS", region)
         return out
 
     if all_three_same:
