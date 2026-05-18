@@ -27,7 +27,7 @@ from collect import (
     upload_patient_raw,
     upload_patient_trend,
 )
-from sync_supabase import check_scan_exists, get_uploaded_mrns
+from sync_supabase import check_scan_exists, get_uploaded_mrns, get_uploaded_mrns_with_type
 
 log = logging.getLogger(__name__)
 
@@ -117,9 +117,9 @@ def all_patients(q: Optional[str] = None, max_count: int = 200):
 
 @app.get('/db-mrns')
 def db_mrns():
-    """Return all patient MRNs already uploaded to Supabase. Single batch call."""
+    """Return all uploaded patients as {by_mrn: {patient_id: scan_type}}."""
     try:
-        return {'mrns': list(get_uploaded_mrns())}
+        return {'by_mrn': get_uploaded_mrns_with_type()}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

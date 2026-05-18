@@ -74,9 +74,15 @@ def check_scan_exists(mrn: str, scan_date: str) -> bool:
 
 
 def get_uploaded_mrns() -> set[str]:
+    """Return set of all patient MRNs already in Supabase."""
+    return set(get_uploaded_mrns_with_type().keys())
+
+
+def get_uploaded_mrns_with_type() -> dict[str, str]:
     """
-    Return the set of all patient MRNs (patient_id values) already in Supabase.
-    Single REST call — used by the Browse MDB modal to mark uploaded patients.
+    Return {patient_id: scan_type} for all patients already in Supabase.
+    Queries bmd_scans (has scan_type) joined to bmd_patients via patient_id.
+    Used by the /db-mrns endpoint so the frontend can show the right buttons.
     """
     try:
         headers = {
@@ -87,16 +93,21 @@ def get_uploaded_mrns() -> set[str]:
         }
         rest = f"{config.SUPABASE_URL}/rest/v1"
         r = httpx.get(
-            f"{rest}/bmd_patients",
-            params={'select': 'patient_id', 'patient_id': 'not.is.null'},
+            f"{rest}/bmd_scans",
+            params={'select': 'patient_id,scan_type', 'patient_id': 'not.is.null'},
             headers=headers, timeout=15,
         )
         r.raise_for_status()
-        return {row['patient_id'] for row in r.json() if row.get('patient_id')}
+        result: dict[str, str] = {}
+        for row in r.json():
+            pid = row.get('patient_id')
+            st  = row.get('scan_type') or 'osteo'
+            if pid:
+                result[pid] = st
+        return result
     except Exception as e:
-        log.warning("get_uploaded_mrns failed: %s", e)
-        return set()
-        return False
+        log.warning("get_uploaded_mrns_with_type failed: %s", e)
+        return {}
 
 
 # ── PDF storage ───────────────────────────────────────────────────────────
