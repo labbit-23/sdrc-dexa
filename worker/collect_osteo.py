@@ -51,11 +51,12 @@ XPS_LABELS = ('spine', 'left_femur', 'right_femur')
 def _classify_xps(xps_path: str) -> str:
     """
     Read text from an XPS file and classify it as
-    'spine' | 'left_femur' | 'right_femur' | 'combined' | 'unknown'.
+    'spine' | 'left_femur' | 'right_femur' | 'combined' | 'dual_femur' | 'unknown'.
 
     GE Lunar often produces combined XPS files containing all three scan
     types (AP Spine + Left Femur + Right Femur) in a single document.
     These are classified as 'combined' and used for all three slots.
+    A dual-femur-only XPS (no spine) is classified as 'dual_femur'.
     """
     try:
         tokens = ' '.join(t for _, _, t in extract_xps_text(xps_path))
@@ -71,7 +72,7 @@ def _classify_xps(xps_path: str) -> str:
     if has_spine and not has_femur:
         return 'spine'
     if has_femur and has_left and has_right and not has_spine:
-        return 'combined'  # dual femur only — treat as combined (both femur slots)
+        return 'dual_femur'
     if has_femur and has_left and not has_right:
         return 'left_femur'
     if has_femur and has_right and not has_left:
@@ -161,7 +162,14 @@ def detect_osteo_xps(
         label = _classify_xps(str(xps_path))
         abs_path = str(xps_path.resolve())
         mtime_str = datetime.fromtimestamp(xps_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M')
-        if label == 'combined':
+        if label == 'dual_femur':
+            if _has_scan_images(abs_path):
+                log.info("  %s → dual_femur + images  (modified %s)", xps_path.name, mtime_str)
+                return {'left_femur': abs_path, 'right_femur': abs_path}
+            elif combined_no_images is None:
+                log.info("  %s → dual_femur (text only)  (modified %s)", xps_path.name, mtime_str)
+                combined_no_images = abs_path
+        elif label == 'combined':
             if _has_scan_images(abs_path):
                 log.info("  %s → combined + images  (modified %s)", xps_path.name, mtime_str)
                 return {'spine': abs_path, 'left_femur': abs_path, 'right_femur': abs_path}
