@@ -70,6 +70,8 @@ def _classify_xps(xps_path: str) -> str:
         return 'combined'
     if has_spine and not has_femur:
         return 'spine'
+    if has_femur and has_left and has_right and not has_spine:
+        return 'combined'  # dual femur only — treat as combined (both femur slots)
     if has_femur and has_left and not has_right:
         return 'left_femur'
     if has_femur and has_right and not has_left:
