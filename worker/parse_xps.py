@@ -627,6 +627,17 @@ def extract_osteo_images(
     return result
 
 
+def _crop_to_roi_bottom(img: Image.Image, margin_px: int = 25) -> Image.Image:
+    """Crop hip overlay to just below the lowest black ROI triangle line."""
+    arr = np.array(img.convert('RGB'))
+    r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
+    black_rows = np.where(((r < 50) & (g < 50) & (b < 50)).any(axis=1))[0]
+    if len(black_rows) == 0:
+        return img
+    bottom = min(int(black_rows[-1]) + margin_px, img.height)
+    return img.crop((0, 0, img.width, bottom))
+
+
 def render_osteo_overlay_pages(
     spine_xps: str,
     left_femur_xps: str,
@@ -652,8 +663,51 @@ def render_osteo_overlay_pages(
         spine_xps and left_femur_xps and right_femur_xps
         and spine_xps == left_femur_xps == right_femur_xps
     )
+    dual_femur_only = (
+        not spine_xps
+        and left_femur_xps and right_femur_xps
+        and left_femur_xps == right_femur_xps
+    )
 
     out: dict[str, bytes] = {}
+
+    def _femur_png(img: Image.Image) -> bytes:
+        img = _crop_to_roi_bottom(img)
+        buf = io.BytesIO()
+        img.save(buf, 'PNG', optimize=True)
+        return buf.getvalue()
+
+    if dual_femur_only:
+        # Dual femur XPS: left and right in the same file, no spine.
+        # Render once, split by strip bounds — same approach as combined.
+        pages = render_xps_pages(left_femur_xps, dpi=dpi)
+        if not pages:
+            return out
+        region_bounds = _parse_all_strip_bounds(left_femur_xps)
+        for region, key in [
+            ('left_femur',  'left_femur_overlay'),
+            ('right_femur', 'right_femur_overlay'),
+        ]:
+            if region in region_bounds:
+                raw = _bounds_to_png(pages[0], region_bounds[region], dpi, label=key)
+                img = Image.open(io.BytesIO(raw)).convert('RGB')
+                out[key] = _femur_png(img)
+            else:
+                log.warning("render_osteo_overlay_pages: no strip bounds for %s", region)
+        if 'left_femur_overlay' in out and 'right_femur_overlay' in out:
+            lf_img = Image.open(io.BytesIO(out['left_femur_overlay'])).convert('RGB')
+            rf_img = Image.open(io.BytesIO(out['right_femur_overlay'])).convert('RGB')
+            tw = max(lf_img.width, rf_img.width)
+            th = max(lf_img.height, rf_img.height)
+            for slot, img in [('left_femur_overlay', lf_img), ('right_femur_overlay', rf_img)]:
+                if img.width != tw or img.height != th:
+                    canvas = Image.new('RGB', (tw, th), (255, 255, 255))
+                    canvas.paste(img, ((tw - img.width) // 2, 0))
+                    img = canvas
+                buf = io.BytesIO()
+                img.save(buf, 'PNG', optimize=True)
+                out[slot] = buf.getvalue()
+        return out
 
     if all_three_same:
         # Combined XPS: single page with all three scans stacked vertically.
@@ -677,8 +731,8 @@ def render_osteo_overlay_pages(
         # PAD (white canvas) not stretch — preserves content scale so both
         # images look the same size inside the CSS height:200px container.
         if 'left_femur_overlay' in out and 'right_femur_overlay' in out:
-            lf_img = Image.open(io.BytesIO(out['left_femur_overlay'])).convert('RGB')
-            rf_img = Image.open(io.BytesIO(out['right_femur_overlay'])).convert('RGB')
+            lf_img = _crop_to_roi_bottom(Image.open(io.BytesIO(out['left_femur_overlay'])).convert('RGB'))
+            rf_img = _crop_to_roi_bottom(Image.open(io.BytesIO(out['right_femur_overlay'])).convert('RGB'))
             tw = max(lf_img.width,  rf_img.width)
             th = max(lf_img.height, rf_img.height)
             for slot, img in [('left_femur_overlay', lf_img), ('right_femur_overlay', rf_img)]:
@@ -702,8 +756,16 @@ def render_osteo_overlay_pages(
         if not path:
             continue
         pages = render_xps_pages(path, dpi=dpi)
-        if pages:
-            out[label] = crop_xps_scan_image(pages[0], path, dpi=dpi)
+        if not pages:
+            continue
+        raw = crop_xps_scan_image(pages[0], path, dpi=dpi)
+        if label in ('left_femur_overlay', 'right_femur_overlay'):
+            img = _crop_to_roi_bottom(Image.open(io.BytesIO(raw)).convert('RGB'))
+            buf = io.BytesIO()
+            img.save(buf, 'PNG', optimize=True)
+            out[label] = buf.getvalue()
+        else:
+            out[label] = raw
 
     return out
 
