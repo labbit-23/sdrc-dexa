@@ -80,9 +80,9 @@ def get_uploaded_mrns() -> set[str]:
 
 def get_uploaded_mrns_with_type() -> dict[str, str]:
     """
-    Return {patient_id: scan_type} for all patients already in Supabase.
-    Queries bmd_scans (has scan_type) joined to bmd_patients via patient_id.
-    Used by the /db-mrns endpoint so the frontend can show the right buttons.
+    Return {mrn: scan_type} for all patients already in Supabase.
+    Queries bmd_patients (has the MRN string) with embedded bmd_scans
+    (has scan_type). bmd_scans.patient_id is a UUID FK, not the MRN.
     """
     try:
         headers = {
@@ -93,17 +93,18 @@ def get_uploaded_mrns_with_type() -> dict[str, str]:
         }
         rest = f"{config.SUPABASE_URL}/rest/v1"
         r = httpx.get(
-            f"{rest}/bmd_scans",
-            params={'select': 'patient_id,scan_type', 'patient_id': 'not.is.null'},
+            f"{rest}/bmd_patients",
+            params={'select': 'patient_id,bmd_scans(scan_type)', 'patient_id': 'not.is.null'},
             headers=headers, timeout=15,
         )
         r.raise_for_status()
         result: dict[str, str] = {}
         for row in r.json():
-            pid = row.get('patient_id')
-            st  = row.get('scan_type') or 'osteo'
-            if pid:
-                result[pid] = st
+            mrn   = row.get('patient_id')
+            scans = row.get('bmd_scans') or []
+            st    = scans[0].get('scan_type', 'osteo') if scans else 'osteo'
+            if mrn:
+                result[mrn] = st
         return result
     except Exception as e:
         log.warning("get_uploaded_mrns_with_type failed: %s", e)
