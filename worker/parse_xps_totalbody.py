@@ -393,10 +393,21 @@ def extract_totalbody_images(bone_xps: str, comp_xps: str = None) -> dict:
             left_img  = _stitch_raw(_load_strips(left_nums))  if left_nums  else None
             right_img = _stitch_raw(_load_strips(right_nums)) if right_nums else None
 
-            # Assign by height: body silhouette (full figure) is always taller
-            # than the BMD regional bar chart.
+            def _is_soft_tissue(img: Image.Image) -> bool:
+                """
+                Soft-tissue image has predominantly dark non-background pixels
+                (fat tissue has low X-ray attenuation → dark).
+                Bone scan has many bright pixels (bones are dense → bright).
+                Median intensity of non-background pixels < 100 → soft tissue.
+                """
+                arr = np.array(img.convert('L'), dtype=np.float32)
+                non_bg = arr[arr < 238]
+                if len(non_bg) == 0:
+                    return True
+                return float(np.median(non_bg)) < 100
+
             if left_img and right_img:
-                if left_img.height >= right_img.height:
+                if _is_soft_tissue(left_img):
                     result['body_silhouette'] = left_img
                     result['bmd_chart']        = right_img
                 else:
