@@ -165,6 +165,25 @@ def upsert_patient(sb: Client, patient: dict) -> str:
     return result.data[0]['id']
 
 
+def _osteo_scan_type(session: dict) -> str:
+    """
+    Derive specific osteo scan_type from MDB session.
+    Uses the presence of spine / left_femur / right_femur data — all sourced
+    from the MDB scantype field, never from XPS content.
+
+      spine + any femur  → 'spine_femur'
+      femur(s) only      → 'dual_femur'
+      spine only         → 'spine_only'
+      unknown            → 'osteo'  (legacy fallback)
+    """
+    has_spine = bool(session.get('spine'))
+    has_femur = bool(session.get('left_femur')) or bool(session.get('right_femur'))
+    if has_spine and has_femur:  return 'spine_femur'
+    if has_femur:                return 'dual_femur'
+    if has_spine:                return 'spine_only'
+    return 'osteo'
+
+
 def upsert_scan(sb: Client, patient_uuid: str, session: dict) -> str:
     """Upsert scan row. Returns Supabase scan UUID."""
     scan_date = session.get('scan_date')
@@ -175,6 +194,7 @@ def upsert_scan(sb: Client, patient_uuid: str, session: dict) -> str:
         'scanner_serial': session.get('scanner_serial') or config.SCANNER_ID,
         'software':       session.get('software') or config.SOFTWARE,
         'xps_filename':   session.get('xps_filename') or session.get('ntx_filename'),
+        'scan_type':      _osteo_scan_type(session),
         'raw_json':       json.dumps(session, default=_ser),
     }
     result = (
@@ -405,7 +425,7 @@ def upload_osteo_raw(
             'scanner_serial': session_data.get('scanner_serial') or config.SCANNER_ID,
             'software':       session_data.get('software') or config.SOFTWARE,
             'xps_filename':   session_data.get('ntx_filename') or None,
-            'scan_type':      'osteo',
+            'scan_type':      _osteo_scan_type(session_data),
             'image_paths':    image_paths,
             'raw_json':       raw_json_str,
         }
