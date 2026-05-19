@@ -215,20 +215,101 @@ def _parse_dual_femur_bounds(xps_path: str) -> dict[str, tuple[float, float, flo
     return result
 
 
+def _parse_single_scan_bounds(xps_path: str) -> tuple[float, float, float, float] | None:
+    """
+    Return crop bounds for a SINGLE-scan XPS (spine-only, or one femur).
+
+    Unlike _parse_all_strip_bounds which uses hardcoded strip-number ranges
+    calibrated for combined (spine+dual-femur) XPS files, this function:
+      1. Opens the ZIP and identifies valid scan strips by their image properties
+         (non-RGBA, height≥30, width≥300) — no assumed strip numbers.
+      2. Reads the fpage XAML and looks up Viewport coords for those strip numbers.
+      3. Returns the bounding box of all valid strip Viewports.
+
+    This is robust to GE Lunar single-scan XPS files that may number their
+    strips completely differently from the combined report format.
+    """
+    try:
+        with zipfile.ZipFile(xps_path) as z:
+            fpage = z.read("Documents/1/Pages/1.fpage").decode("utf-8", errors="replace")
+            # Find all valid scan strip numbers from the ZIP contents
+            valid_strips: set[int] = set()
+            for name in z.namelist():
+                if 'Images' not in name or not name.endswith('.PNG'):
+                    continue
+                try:
+                    num = int(name.split('/')[-1].replace('.PNG', ''))
+                    raw = z.read(name)
+                    img = Image.open(io.BytesIO(raw))
+                    if img.mode != 'RGBA' and img.height >= 30 and img.width >= 300:
+                        valid_strips.add(num)
+                except Exception:
+                    pass
+    except Exception:
+        return None
+
+    if not valid_strips:
+        return None
+
+    strip_re = re.compile(
+        r'ImageSource="[^"]*Images/(\d+)\.PNG"[^/]*?Viewport="([\d.]+),([\d.]+),([\d.]+),([\d.]+)"'
+        r'|'
+        r'Viewport="([\d.]+),([\d.]+),([\d.]+),([\d.]+)"[^/]*?ImageSource="[^"]*Images/(\d+)\.PNG"',
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    boxes: list[tuple[float, float, float, float]] = []
+    for m in strip_re.finditer(fpage):
+        if m.group(1):
+            num = int(m.group(1))
+            x, y, w, h = float(m.group(2)), float(m.group(3)), float(m.group(4)), float(m.group(5))
+        else:
+            num = int(m.group(10))
+            x, y, w, h = float(m.group(6)), float(m.group(7)), float(m.group(8)), float(m.group(9))
+        if num not in valid_strips or w < 5 or h < 2:
+            continue
+        boxes.append((x, y, x + w, y + h))
+
+    if not boxes:
+        return None
+
+    bx1 = min(b[0] for b in boxes)
+    by1 = min(b[1] for b in boxes)
+    bx2 = max(b[2] for b in boxes)
+    by2 = max(b[3] for b in boxes)
+
+    # Cap bottom at "Image not for diagnosis" disclaimer if present below scan
+    all_disclaimer_ys = []
+    for m in re.finditer(r'UnicodeString="[^"]*not\s+for\s+diagnosis[^"]*"', fpage, re.IGNORECASE):
+        elem_start = fpage.rfind('<Glyphs', 0, m.start())
+        if elem_start == -1:
+            elem_start = max(0, m.start() - 8000)
+        ctx = fpage[elem_start:m.start()]
+        oys = re.findall(r'OriginY="([\d.]+)"', ctx)
+        if oys:
+            all_disclaimer_ys.append(float(oys[-1]))
+    local_disclaimers = [y for y in all_disclaimer_ys if by1 < y < by2 + 300]
+    if local_disclaimers:
+        cap = min(local_disclaimers) - 2
+        if cap > by1 + 20:
+            by2 = min(by2, cap)
+
+    log.info("_parse_single_scan_bounds: %d valid strips → bounds=(%.1f,%.1f,%.1f,%.1f)",
+             len(boxes), bx1, by1, bx2, by2)
+    return (max(0, bx1 - 8), max(0, by1 - 40), bx2 - 20, by2 + 2)
+
+
 def _parse_scan_bounds(xps_path: str) -> tuple[float, float, float, float] | None:
     """
     Return a single crop bound covering all scan strips on page 1.
     Used for single-scan XPS files.  For combined XPS use _parse_all_strip_bounds.
+
+    Tries _parse_single_scan_bounds first (discovers strips from ZIP contents,
+    no hardcoded strip-number ranges), then falls back to the clip-path method.
     """
-    all_bounds = _parse_all_strip_bounds(xps_path)
-    if all_bounds:
-        # Union of all regions
-        all_boxes = list(all_bounds.values())
-        bx1 = min(b[0] for b in all_boxes)
-        by1 = min(b[1] for b in all_boxes)
-        bx2 = max(b[2] for b in all_boxes)
-        by2 = max(b[3] for b in all_boxes)
-        return (bx1, by1, bx2, by2)
+    bounds = _parse_single_scan_bounds(xps_path)
+    if bounds:
+        return bounds
 
     # Fallback: clip paths
     try:
