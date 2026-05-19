@@ -214,21 +214,41 @@ def upload(patient_id: str, body: UploadBody):
         def _cb(msg):
             q.put({'msg': msg})
         try:
-            from parse_xps import detect_xps_type
-            tb_types = {'totalbody_bone', 'totalbody_composition', 'totalbody_narrative'}
-            types = [detect_xps_type(p) for p in xps]
-            is_totalbody = any(t in tb_types for t in types)
+            # ── Determine scan type from MDB — the single source of truth ────
+            # XPS is used ONLY for image/overlay extraction, never for routing.
+            from parse_mdb import MdbParser
+            parser = MdbParser(config.MDB_PATH)
+            pat_handles = [
+                ph for ph, row in parser._patients.items()
+                if row.get('patient_id', '').strip() == patient_id
+            ]
+            mdb_scan_type = 'osteo'  # safe default
+            if pat_handles:
+                session = parser.get_latest_session(pat_handles[0])
+                if session:
+                    mdb_scan_type = session.get('mdb_scan_type', 'osteo')
+            log.info('upload %s: MDB scan type = %s', patient_id, mdb_scan_type)
+            _cb(f'MDB scan type: {mdb_scan_type}')
+
+            is_totalbody = (mdb_scan_type == 'total_body')
 
             if is_totalbody:
+                # Within total-body, XPS sub-type (bone vs composition) is
+                # legitimately XPS-only information — MDB doesn't distinguish.
+                from parse_xps import detect_xps_type
                 from collect_totalbody import upload_totalbody_scan
                 xps_map: dict[str, str] = {}
-                for p, t in zip(xps, types):
+                for p in xps:
+                    t = detect_xps_type(p)
                     if t == 'totalbody_bone' and 'bone' not in xps_map:
                         xps_map['bone'] = p
                     elif t in ('totalbody_composition', 'totalbody_narrative') and 'composition' not in xps_map:
                         xps_map['composition'] = p
                 result = upload_totalbody_scan(patient_id, xps_map, progress_cb=_cb)
             else:
+                # Osteo: _classify_xps only maps XPS files to image slots
+                # (spine / left_femur / right_femur / combined / dual_femur).
+                # The osteo vs total-body routing was already decided by MDB above.
                 from collect_osteo import upload_osteo_scan, _classify_xps
                 xps_map = {}
                 for p in xps:
