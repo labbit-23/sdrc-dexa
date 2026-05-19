@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Optional
 
 import config
-from parse_mdb import load_patient_session, list_patient_sessions
+from parse_mdb import list_patient_sessions
 from parse_xps import extract_xps_text, extract_osteo_images, render_osteo_overlay_pages
 
 log = logging.getLogger(__name__)
@@ -297,27 +297,55 @@ def get_sessions_for_mrn(mrn: str) -> list[dict]:
 
 def build_raw_osteo_json(mrn: str, scan_index: int = 0) -> dict:
     """
-    Load the patient + latest spine/hip session from MDB.
-    Returns a dict ready for JSON serialisation (same shape as
-    the existing gen_osteo_json.py output).
+    Load the patient + most recent OSTEO (spine/hip) session from MDB.
 
-    Raises RuntimeError if the patient is not found in the MDB.
+    Scoped strictly to osteo sessions (mdb_scan_type='osteo') across ALL
+    pat_handles for this MRN.  Combined-scan patients (who also have a
+    total-body scan) are handled correctly — total-body sessions are
+    excluded so their composition data never bleeds into the osteo raw_json.
+
+    Raises RuntimeError if the patient or an osteo session is not found.
     """
-    data = load_patient_session(config.MDB_PATH, mrn, scan_index=scan_index)
-    if not data:
+    from parse_mdb import MdbParser
+
+    parser = MdbParser(config.MDB_PATH)
+
+    # Collect osteo sessions across ALL pat_handles for this MRN.
+    # Combined-scan patients can have separate pat_handles per scan type,
+    # or both types under the same handle — both cases are handled here.
+    pat_sessions: list[tuple[dict, dict]] = []
+    for ph, row in parser._patients.items():
+        if row.get('patient_id', '').strip() != mrn:
+            continue
+        pat = parser._parse_patient(row)
+        for sess in parser.get_scan_sessions(ph):
+            if sess.get('mdb_scan_type') == 'osteo':
+                pat_sessions.append((pat, sess))
+
+    if not pat_sessions:
         raise RuntimeError(
-            f"Patient MRN '{mrn}' not found in MDB.\n"
-            "Check that the patient ID was entered correctly in GE Lunar."
+            f"Patient MRN '{mrn}' has no osteo scan sessions in MDB.\n"
+            "Check that the spine/femur scan was performed and analysed in GE Lunar."
         )
 
-    pat  = data['patient']
-    sess = data['session']
+    # Newest osteo session first
+    pat_sessions.sort(
+        key=lambda x: x[1].get('scan_date') or datetime.min, reverse=True
+    )
+
+    if scan_index >= len(pat_sessions):
+        raise RuntimeError(
+            f"scan_index {scan_index} out of range — "
+            f"patient has {len(pat_sessions)} osteo session(s)."
+        )
+
+    pat, sess = pat_sessions[scan_index]
 
     return {
         'patient': {
             'pat_handle':  pat['pat_handle'],
-            'patient_id':  pat['patient_id'],   # accession no (kept for audit)
-            'mrn':         mrn,                  # MRN == patient_id field in GE Lunar
+            'patient_id':  pat['patient_id'],
+            'mrn':         mrn,
             'name':        pat.get('name', ''),
             'title':       pat.get('title', ''),
             'dob':         pat['dob'].isoformat() if pat.get('dob') else '',
