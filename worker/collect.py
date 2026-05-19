@@ -77,13 +77,28 @@ def get_recent_patients(
         seen_pids.add(pid)
 
         patient  = parser._parse_patient(pat_row)
-        sessions = parser.get_scan_sessions(pat_handle)
-        session  = sessions[0] if sessions else {}
+
+        # Gather sessions from ALL pat_handles that share this patient_id.
+        # The GE Lunar scanner sometimes creates separate patient records for
+        # the same person (one for osteo, one for total body), so a single
+        # pat_handle may not have all sessions.
+        all_pat_handles = [
+            ph for ph, row in parser._patients.items()
+            if row.get('patient_id', '').strip() == pid
+        ]
+        all_sessions = []
+        for ph in all_pat_handles:
+            all_sessions.extend(parser.get_scan_sessions(ph))
+        all_sessions.sort(
+            key=lambda s: s.get('scan_date') or datetime.min, reverse=True
+        )
+        session  = all_sessions[0] if all_sessions else {}
 
         xps_found = find_xps_for_patient(pid, acq)
         results.append({
             'patient':     patient,
-            'session':     session,
+            'session':     session,    # most-recent session (for compat)
+            'sessions':    all_sessions,  # all sessions (for component display)
             'scan_date':   acq,
             'xps_files':   xps_found,
             'xps_missing': len(xps_found) == 0,

@@ -67,45 +67,51 @@ def status():
     }
 
 
-def _derive_scan_components(session: dict) -> dict:
+def _derive_scan_components(session_or_sessions) -> dict:
     """
-    Derive human-readable scan component info from an MDB session dict.
+    Derive human-readable scan component info from one or more MDB session dicts.
+
+    Accepts either a single session dict (legacy) or a list of sessions.
+    Aggregates across all sessions so a patient with both osteo and total-body
+    scans shows all components, not just the most recent one.
 
     Returns:
-      mdb_scan_type  – 'osteo' | 'total_body'
-      scan_components – list of present components, e.g. ['AP Spine', 'Left Femur', 'Right Femur']
+      mdb_scan_type   – 'total_body' if any session is total_body, else 'osteo'
+      scan_components – sorted list, e.g. ['AP Spine', 'Left Femur', 'Total Body']
       has_spine       – bool
       has_left_femur  – bool
       has_right_femur – bool
+      has_total_body  – bool
+      has_osteo       – bool
     """
-    if not session:
-        return {
-            'mdb_scan_type': None,
-            'scan_components': [],
-            'has_spine': False,
-            'has_left_femur': False,
-            'has_right_femur': False,
-        }
+    sessions = (
+        session_or_sessions if isinstance(session_or_sessions, list)
+        else [session_or_sessions] if session_or_sessions else []
+    )
 
-    mdb_scan_type  = session.get('mdb_scan_type', 'osteo')
-    has_spine      = bool(session.get('spine'))
-    has_left       = bool(session.get('left_femur'))
-    has_right      = bool(session.get('right_femur'))
+    has_total_body = any(s.get('mdb_scan_type') == 'total_body' for s in sessions)
+    has_osteo      = any(s.get('mdb_scan_type') == 'osteo'       for s in sessions)
+    has_spine      = any(bool(s.get('spine'))       for s in sessions)
+    has_left       = any(bool(s.get('left_femur'))  for s in sessions)
+    has_right      = any(bool(s.get('right_femur')) for s in sessions)
 
-    if mdb_scan_type == 'total_body':
-        components = ['Total Body']
-    else:
-        components = []
-        if has_spine:      components.append('AP Spine')
-        if has_left:       components.append('Left Femur')
-        if has_right:      components.append('Right Femur')
+    components = []
+    if has_total_body:              components.append('Total Body')
+    if has_spine:                   components.append('AP Spine')
+    if has_left:                    components.append('Left Femur')
+    if has_right:                   components.append('Right Femur')
+
+    # Primary routing type: total_body takes precedence when both exist
+    mdb_scan_type = 'total_body' if has_total_body else 'osteo'
 
     return {
-        'mdb_scan_type':  mdb_scan_type,
+        'mdb_scan_type':   mdb_scan_type,
         'scan_components': components,
         'has_spine':       has_spine,
         'has_left_femur':  has_left,
         'has_right_femur': has_right,
+        'has_total_body':  has_total_body,
+        'has_osteo':       has_osteo,
     }
 
 
@@ -156,7 +162,9 @@ def recent(
         sd       = info.get('scan_date')
         date_str = sd.strftime('%Y-%m-%d') if sd else ''
         exists   = bool(date_str and check_scan_exists(pid, date_str))
-        components = _derive_scan_components(info.get('session', {}))
+        # Use all sessions if available; fall back to single session for compat
+        sessions = info.get('sessions') or [info.get('session', {})]
+        components = _derive_scan_components(sessions)
         out.append({**_jsonify(info), 'exists_in_db': exists, **components})
     return out
 
@@ -176,7 +184,7 @@ def all_patients(q: Optional[str] = None, max_count: int = 200):
             or ql in (p['patient'].get('name') or '').lower()
         ]
     return _jsonify([
-        {**p, **_derive_scan_components(p.get('session', {}))}
+        {**p, **_derive_scan_components(p.get('sessions') or [p.get('session', {})])}
         for p in patients
     ])
 
