@@ -296,7 +296,9 @@ def _parse_single_scan_bounds(xps_path: str) -> tuple[float, float, float, float
 
     log.info("_parse_single_scan_bounds: %d valid strips → bounds=(%.1f,%.1f,%.1f,%.1f)",
              len(boxes), bx1, by1, bx2, by2)
-    return (max(0, bx1 - 8), max(0, by1 - 40), bx2 - 20, by2 + 2)
+    # top_margin: small — ROI boxes start at first strip, no need to reach into header zone.
+    # 40 was too large and pulled in the GE Lunar patient-header text above the scan.
+    return (max(0, bx1 - 8), max(0, by1 - 8), bx2 - 20, by2 + 2)
 
 
 def _parse_scan_bounds(xps_path: str) -> tuple[float, float, float, float] | None:
