@@ -224,17 +224,26 @@ def run_pipeline_xps(xps_path: str, upload: bool = True) -> Optional[bytes]:
 
     log.info("XPS trigger: %s  patient_id=%s", xps_file.name, patient_id)
 
-    xps_type = detect_xps_type(xps_path)
-    log.info("Detected XPS type: %s", xps_type)
+    # ── Route from MDB — the single source of truth for scan type ────────────
+    # XPS content detection is unreliable (spine-only looks like total-body-bone).
+    parser = MdbParser(config.MDB_PATH)
+    pat_handles = [
+        ph for ph, row in parser._patients.items()
+        if row.get('patient_id', '').strip() == patient_id
+    ]
+    mdb_scan_type = 'osteo'  # safe default
+    if pat_handles:
+        session = parser.get_latest_session(pat_handles[0])
+        if session:
+            mdb_scan_type = session.get('mdb_scan_type', 'osteo')
+    log.info("MDB scan type for %s: %s", patient_id, mdb_scan_type)
 
-    if xps_type == 'spine_femur':
-        return _run_spine_femur(xps_path, patient_id, upload)
-
-    if xps_type.startswith('totalbody'):
+    if mdb_scan_type == 'total_body':
+        # Within total-body, still use XPS sub-type to split bone vs composition files.
+        xps_type = detect_xps_type(xps_path)
         return _run_totalbody(xps_path, patient_id, xps_type, upload)
 
-    log.warning("Unrecognised XPS type '%s' for %s — skipping", xps_type, xps_file.name)
-    return None
+    return _run_spine_femur(xps_path, patient_id, upload)
 
 
 def _run_totalbody(xps_path: str, patient_id: str, xps_type: str,
