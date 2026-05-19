@@ -863,6 +863,10 @@ def detect_xps_type(xps_path: str) -> str:
     if densito_count >= 2:
         return 'spine_femur'
     if densito_count == 1:
+        # Spine-only XPS also has exactly 1 Densitometry Reference section.
+        # Distinguish by presence of vertebra or AP Spine labels.
+        if re.search(r'AP\s+Spine|Lumbar\s+Spine|L1[-–]L4|L[1-4]\b', full, re.IGNORECASE):
+            return 'spine_femur'
         return 'totalbody_bone'
 
     if _TB_COMPOSITION_RE.search(full):
