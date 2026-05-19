@@ -31,13 +31,27 @@ log = logging.getLogger(__name__)
 
 # ── Patient + XPS discovery ───────────────────────────────────────────────────
 
-def get_recent_patients(hours: int = 48) -> list[dict]:
+def get_recent_patients(
+    date_from: Optional[datetime] = None,
+    date_to:   Optional[datetime] = None,
+    hours:     int = 48,
+) -> list[dict]:
     """
-    Return patients who had a scan in the last `hours` hours, newest first.
-    Each dict: patient + latest session info + xps_candidates list.
+    Return patients who had a scan within the given date range, newest first.
+
+    If date_from/date_to are provided they take precedence over `hours`.
+    date_to defaults to end-of-day today when only date_from is given.
+    Caps at 50 results to keep MDB reads small.
     """
     parser = MdbParser(config.MDB_PATH)
-    cutoff = datetime.now() - timedelta(hours=hours)
+
+    if date_from is not None:
+        lo = date_from
+        hi = date_to if date_to is not None else datetime.now().replace(
+            hour=23, minute=59, second=59)
+    else:
+        hi = datetime.now()
+        lo = hi - timedelta(hours=hours)
 
     results = []
     seen_pids = set()
@@ -46,8 +60,12 @@ def get_recent_patients(hours: int = 48) -> list[dict]:
                        key=lambda e: e.get('_acq_dt') or datetime.min,
                        reverse=True):
         acq = exam.get('_acq_dt')
-        if acq and acq < cutoff:
-            break  # exams are newest-first after sort
+        if not acq:
+            continue
+        if acq > hi:
+            continue
+        if acq < lo:
+            break  # sorted newest-first; nothing older will match
 
         pat_handle = exam.get('pat_handle', '')
         pat_row = parser._patients.get(pat_handle)
@@ -58,20 +76,23 @@ def get_recent_patients(hours: int = 48) -> list[dict]:
             continue
         seen_pids.add(pid)
 
-        patient = parser._parse_patient(pat_row)
+        patient  = parser._parse_patient(pat_row)
         sessions = parser.get_scan_sessions(pat_handle)
-        session = sessions[0] if sessions else {}
+        session  = sessions[0] if sessions else {}
 
         xps_found = find_xps_for_patient(pid, acq)
         results.append({
-            'patient':       patient,
-            'session':       session,
-            'scan_date':     acq,
-            'xps_files':     xps_found,   # list of Path strings (may be empty)
-            'xps_missing':   len(xps_found) == 0,
+            'patient':     patient,
+            'session':     session,
+            'scan_date':   acq,
+            'xps_files':   xps_found,
+            'xps_missing': len(xps_found) == 0,
         })
 
-    return results[:10]  # cap at 10 most recent
+        if len(results) >= 50:
+            break
+
+    return results
 
 
 def find_xps_for_patient(patient_id: str,

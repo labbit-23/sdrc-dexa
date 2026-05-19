@@ -124,10 +124,30 @@ def _mdb_error(e: Exception):
 
 
 @app.get('/recent')
-def recent(hours: int = 48):
-    """Recent patients (last N hours) + XPS status + Supabase duplicate flag."""
+def recent(
+    hours:     int = 48,
+    date_from: Optional[str] = None,
+    date_to:   Optional[str] = None,
+):
+    """
+    Recent patients + XPS status + Supabase duplicate flag.
+
+    Pass date_from / date_to (ISO date strings, e.g. '2026-05-01') to query a
+    specific date range instead of the rolling `hours` window.
+    """
+    from_dt: Optional[datetime] = None
+    to_dt:   Optional[datetime] = None
     try:
-        patients = get_recent_patients(hours=hours)
+        if date_from:
+            from_dt = datetime.fromisoformat(date_from)
+        if date_to:
+            # end-of-day so the whole target date is included
+            to_dt = datetime.fromisoformat(date_to).replace(hour=23, minute=59, second=59)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=f'Invalid date format: {e}')
+
+    try:
+        patients = get_recent_patients(date_from=from_dt, date_to=to_dt, hours=hours)
     except Exception as e:
         _mdb_error(e)
     out = []
