@@ -67,6 +67,48 @@ def status():
     }
 
 
+def _derive_scan_components(session: dict) -> dict:
+    """
+    Derive human-readable scan component info from an MDB session dict.
+
+    Returns:
+      mdb_scan_type  – 'osteo' | 'total_body'
+      scan_components – list of present components, e.g. ['AP Spine', 'Left Femur', 'Right Femur']
+      has_spine       – bool
+      has_left_femur  – bool
+      has_right_femur – bool
+    """
+    if not session:
+        return {
+            'mdb_scan_type': None,
+            'scan_components': [],
+            'has_spine': False,
+            'has_left_femur': False,
+            'has_right_femur': False,
+        }
+
+    mdb_scan_type  = session.get('mdb_scan_type', 'osteo')
+    has_spine      = bool(session.get('spine'))
+    has_left       = bool(session.get('left_femur'))
+    has_right      = bool(session.get('right_femur'))
+
+    if mdb_scan_type == 'total_body':
+        components = ['Total Body']
+    else:
+        components = []
+        if has_spine:      components.append('AP Spine')
+        if has_left:       components.append('Left Femur')
+        if has_right:      components.append('Right Femur')
+
+    return {
+        'mdb_scan_type':  mdb_scan_type,
+        'scan_components': components,
+        'has_spine':       has_spine,
+        'has_left_femur':  has_left,
+        'has_right_femur': has_right,
+    }
+
+
 def _mdb_error(e: Exception):
     msg = str(e)
     # CIFS/network mount failures surface as file-not-found or permission errors
@@ -94,7 +136,8 @@ def recent(hours: int = 48):
         sd       = info.get('scan_date')
         date_str = sd.strftime('%Y-%m-%d') if sd else ''
         exists   = bool(date_str and check_scan_exists(pid, date_str))
-        out.append({**_jsonify(info), 'exists_in_db': exists})
+        components = _derive_scan_components(info.get('session', {}))
+        out.append({**_jsonify(info), 'exists_in_db': exists, **components})
     return out
 
 
@@ -112,7 +155,10 @@ def all_patients(q: Optional[str] = None, max_count: int = 200):
             if ql in (p['patient'].get('patient_id') or '').lower()
             or ql in (p['patient'].get('name') or '').lower()
         ]
-    return _jsonify(patients)
+    return _jsonify([
+        {**p, **_derive_scan_components(p.get('session', {}))}
+        for p in patients
+    ])
 
 
 @app.get('/db-mrns')
