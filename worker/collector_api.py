@@ -200,9 +200,26 @@ def db_mrns():
 
 @app.get('/xps/{patient_id}')
 def xps_for_patient(patient_id: str):
-    """Check which XPS files exist for a given patient in the watch directory."""
+    """Check which XPS files exist for a given patient, with scan-type labels."""
+    from pathlib import Path as _Path
+    from parse_xps import detect_xps_type
+
     files = find_xps_for_patient(patient_id)
-    return {'patient_id': patient_id, 'xps_files': files, 'found': len(files) > 0}
+    typed = []
+    for f in files:
+        try:
+            t = detect_xps_type(f)
+            if t.startswith('totalbody'):
+                xtype = 'total_body'
+            elif t == 'spine_femur':
+                xtype = 'osteo'
+            else:
+                xtype = 'unknown'
+        except Exception:
+            xtype = 'unknown'
+        typed.append({'path': f, 'name': _Path(f).name, 'type': xtype})
+
+    return {'patient_id': patient_id, 'xps_files': files, 'xps_typed': typed, 'found': len(files) > 0}
 
 
 class TrendBody(BaseModel):
@@ -210,7 +227,8 @@ class TrendBody(BaseModel):
 
 
 class UploadBody(BaseModel):
-    xps_paths: list[str] = []
+    xps_paths:          list[str] = []
+    scan_type_override: Optional[str] = None   # 'osteo' | 'total_body'
 
 
 # ── Archive MDB endpoints ─────────────────────────────────────────────────────
@@ -288,21 +306,27 @@ def upload(patient_id: str, body: UploadBody):
         def _cb(msg):
             q.put({'msg': msg})
         try:
-            # ── Determine scan type from MDB — the single source of truth ────
-            # XPS is used ONLY for image/overlay extraction, never for routing.
-            from parse_mdb import MdbParser
-            parser = MdbParser(config.MDB_PATH)
-            pat_handles = [
-                ph for ph, row in parser._patients.items()
-                if row.get('patient_id', '').strip() == patient_id
-            ]
-            mdb_scan_type = 'osteo'  # safe default
-            if pat_handles:
-                session = parser.get_latest_session(pat_handles[0])
-                if session:
-                    mdb_scan_type = session.get('mdb_scan_type', 'osteo')
-            log.info('upload %s: MDB scan type = %s', patient_id, mdb_scan_type)
-            _cb(f'MDB scan type: {mdb_scan_type}')
+            # ── Determine scan type ───────────────────────────────────────────
+            # Explicit override (from UI button) takes absolute precedence.
+            # Otherwise fall back to MDB — the single source of truth.
+            if body.scan_type_override in ('osteo', 'total_body'):
+                mdb_scan_type = body.scan_type_override
+                log.info('upload %s: scan type override = %s', patient_id, mdb_scan_type)
+                _cb(f'Scan type: {mdb_scan_type} (explicit)')
+            else:
+                from parse_mdb import MdbParser
+                parser = MdbParser(config.MDB_PATH)
+                pat_handles = [
+                    ph for ph, row in parser._patients.items()
+                    if row.get('patient_id', '').strip() == patient_id
+                ]
+                mdb_scan_type = 'osteo'  # safe default
+                if pat_handles:
+                    session = parser.get_latest_session(pat_handles[0])
+                    if session:
+                        mdb_scan_type = session.get('mdb_scan_type', 'osteo')
+                log.info('upload %s: MDB scan type = %s', patient_id, mdb_scan_type)
+                _cb(f'MDB scan type: {mdb_scan_type}')
 
             is_totalbody = (mdb_scan_type == 'total_body')
 
