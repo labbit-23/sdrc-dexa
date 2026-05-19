@@ -164,9 +164,15 @@ insert into bmd_metadata (category, key, label, confidence, notes) values
   ('comp_label_unknown', '100', 'Unknown', 'unknown',
    'Negative values observed in all scans. Excluded from all calculations. '
    'GE internal use suspected — no documentation available.'),
-  ('comp_label_unknown', '110', 'Unknown', 'unknown', 'Same as label 100.'),
-  ('comp_label_unknown', '120', 'Unknown', 'unknown', 'Same as label 100.'),
-  ('comp_label_unknown', '130', 'Unknown', 'unknown', 'Same as label 100.');
+  ('comp_label_unknown', '110', 'Unknown', 'unknown',
+   'Negative values observed in all scans. Excluded from all calculations. '
+   'GE internal use suspected — no documentation available.'),
+  ('comp_label_unknown', '120', 'Unknown', 'unknown',
+   'Negative values observed in all scans. Excluded from all calculations. '
+   'GE internal use suspected — no documentation available.'),
+  ('comp_label_unknown', '130', 'Unknown', 'unknown',
+   'Negative values observed in all scans. Excluded from all calculations. '
+   'GE internal use suspected — no documentation available.');
 
 
 -- ─── XPS file type detection ──────────────────────────────────────────────────
