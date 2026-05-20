@@ -383,12 +383,35 @@ def _body_column_bounds(bone_xps: str) -> 'tuple | None':
         col_x2 = max(b[2] for b in left_boxes)
         col_y2 = max(b[3] for b in left_boxes)
 
-        margin = 14
-        return (max(0, col_x1 - margin), max(0, col_y1 - margin),
-                col_x2 + margin, col_y2 + margin)
+        # No margin — let render_totalbody_bone_overlay do pixel-aware trimming
+        return (max(0, col_x1), max(0, col_y1), col_x2, col_y2)
     except Exception as e:
         log.warning("_body_column_bounds failed: %s", e)
         return None
+
+
+def _trim_to_content(img: Image.Image, min_dark: int = 8, padding: int = 4) -> Image.Image:
+    """
+    Crop away edge columns/rows that contain fewer than `min_dark` dark pixels.
+    Grid lines and page borders are 1–2px wide with very few dark pixels per row/col;
+    the body silhouette has many more.  This removes table chrome that _auto_trim misses.
+    """
+    arr = np.array(img.convert('RGB'))
+    r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
+    dark = (r < 80) & (g < 80) & (b < 80)
+    col_counts = dark.sum(axis=0)
+    row_counts = dark.sum(axis=1)
+    content_cols = np.where(col_counts >= min_dark)[0]
+    content_rows = np.where(row_counts >= min_dark)[0]
+    if len(content_cols) == 0 or len(content_rows) == 0:
+        return img
+    c0 = max(0, int(content_cols[0]) - padding)
+    c1 = min(img.width,  int(content_cols[-1]) + padding + 1)
+    r0 = max(0, int(content_rows[0]) - padding)
+    r1 = min(img.height, int(content_rows[-1]) + padding + 1)
+    if c1 <= c0 or r1 <= r0:
+        return img
+    return img.crop((c0, r0, c1, r1))
 
 
 def render_totalbody_bone_overlay(bone_xps: str, dpi: int = 200) -> 'Image.Image | None':
@@ -416,7 +439,8 @@ def render_totalbody_bone_overlay(bone_xps: str, dpi: int = 200) -> 'Image.Image
 
     try:
         png_bytes = _bounds_to_png(pages[0], bounds, dpi, label='bone_roi')
-        return Image.open(io.BytesIO(png_bytes)).convert('RGB')
+        img = Image.open(io.BytesIO(png_bytes)).convert('RGB')
+        return _trim_to_content(img)
     except Exception as e:
         log.warning("render_totalbody_bone_overlay crop failed: %s", e)
         return None
