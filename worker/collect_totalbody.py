@@ -30,6 +30,7 @@ from parse_xps_totalbody import (
     parse_totalbody_composition,
     extract_totalbody_images,
     colorize_dexa_silhouette,
+    render_totalbody_bone_overlay,
 )
 from collect import mdb_snapshot          # reuse existing MDB snapshot builder
 
@@ -262,6 +263,20 @@ def extract_tb_images(xps_map: dict[str, str], notify=None) -> dict[str, bytes]:
             _notify(f"  img_bone.png ({len(images['img_bone.png']) // 1024} KB)")
         except Exception as e:
             log.warning("BMD chart save failed: %s", e)
+
+    # Bone silhouette with XAML ROI region boxes (mutool render — requires mupdf-tools)
+    if bone_path:
+        try:
+            bone_roi = render_totalbody_bone_overlay(bone_path)
+            if bone_roi:
+                buf = io.BytesIO()
+                bone_roi.save(buf, 'PNG', optimize=True)
+                images['img_bone_roi.png'] = buf.getvalue()
+                _notify(f"  img_bone_roi.png ({len(images['img_bone_roi.png']) // 1024} KB)")
+            else:
+                _notify("  (bone ROI overlay skipped — mutool not available)")
+        except Exception as e:
+            log.warning("Bone ROI overlay failed: %s", e)
 
     if not images:
         _notify("  Warning: no images could be extracted from XPS.")

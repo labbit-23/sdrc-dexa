@@ -770,14 +770,27 @@ def extract_osteo_images(
     return result
 
 
-def _crop_to_roi_bottom(img: Image.Image, margin_px: int = 25) -> Image.Image:
-    """Crop hip overlay to just below the lowest black ROI triangle line."""
+def _crop_to_roi_bottom(img: Image.Image, margin_px: int = 10) -> Image.Image:
+    """
+    Crop hip overlay to just below the lowest substantial black ROI line.
+
+    GE Lunar femur ROI shapes (neck / trochanter trapezoids) are wide black
+    strokes spanning 30–200+ pixels per row.  Chart tick marks, axis labels, and
+    stray text pixels are narrow (< 10 px).  Requiring ≥ 30 black pixels per row
+    keeps only real ROI content and avoids cropping to the bottom of the
+    densitometry reference chart drawn below the scan.
+    """
     arr = np.array(img.convert('RGB'))
     r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
-    black_rows = np.where(((r < 50) & (g < 50) & (b < 50)).any(axis=1))[0]
-    if len(black_rows) == 0:
+    black_mask = (r < 60) & (g < 60) & (b < 60)
+    black_count = black_mask.sum(axis=1)
+    roi_rows = np.where(black_count >= 30)[0]
+    if len(roi_rows) == 0:
+        # Fallback: any black pixel at all
+        roi_rows = np.where(black_mask.any(axis=1))[0]
+    if len(roi_rows) == 0:
         return img
-    bottom = min(int(black_rows[-1]) + margin_px, img.height)
+    bottom = min(int(roi_rows[-1]) + margin_px, img.height)
     return img.crop((0, 0, img.width, bottom))
 
 

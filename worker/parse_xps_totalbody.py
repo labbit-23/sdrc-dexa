@@ -339,6 +339,89 @@ def _stitch_raw(strips: list) -> Image.Image:
     return canvas
 
 
+def _body_column_bounds(bone_xps: str) -> 'tuple | None':
+    """
+    Return XPS-unit bounding box (x1, y1, x2, y2) for the body silhouette
+    (left) column in Full_body.xps.
+
+    Full_body.xps has two columns of ImageBrush strips side-by-side:
+      left  → soft-tissue / bone silhouette body scan
+      right → BMD chart with numbers
+
+    We read the Path Data rectangles to find which strips belong to the left
+    column (lowest X origin) and return their combined bounding box.
+    """
+    try:
+        with zipfile.ZipFile(bone_xps) as zf:
+            fpage = zf.read('Documents/1/Pages/1.fpage').decode('utf-8')
+
+        entries = []
+        for data, src in _IMGBRUSH_RE.findall(fpage):
+            m = _RECT_RE.match(data.strip())
+            if not m:
+                continue
+            pts = [float(x) for x in m.groups()]
+            # Rectangle path: M x1,y1 L x2,y1 x2,y2 x1,y2
+            x1, y1 = pts[0], pts[1]
+            x2, y2 = pts[4], pts[5]
+            entries.append((round(x1, 0), x1, y1, x2, y2))
+
+        if not entries:
+            return None
+
+        x_groups = sorted({e[0] for e in entries})
+        if len(x_groups) < 2:
+            return None   # cannot distinguish columns
+
+        left_x = x_groups[0]
+        left_boxes = [(x1, y1, x2, y2) for rx, x1, y1, x2, y2 in entries if rx == left_x]
+        if not left_boxes:
+            return None
+
+        col_x1 = min(b[0] for b in left_boxes)
+        col_y1 = min(b[1] for b in left_boxes)
+        col_x2 = max(b[2] for b in left_boxes)
+        col_y2 = max(b[3] for b in left_boxes)
+
+        margin = 14
+        return (max(0, col_x1 - margin), max(0, col_y1 - margin),
+                col_x2 + margin, col_y2 + margin)
+    except Exception as e:
+        log.warning("_body_column_bounds failed: %s", e)
+        return None
+
+
+def render_totalbody_bone_overlay(bone_xps: str, dpi: int = 200) -> 'Image.Image | None':
+    """
+    Render Full_body.xps with mutool (preserving XAML ROI region boxes — the
+    Head / Arms / Legs / Trunk / Ribs / Pelvis / Spine region outlines drawn
+    over the body silhouette), then crop to just the body column.
+
+    Raw strip stitching cannot capture these vector overlays; this function
+    produces the image that shows the body with its bone-density ROI regions.
+
+    Returns None if mutool is unavailable or bounds cannot be determined.
+    """
+    from parse_xps import render_xps_pages, _bounds_to_png
+
+    bounds = _body_column_bounds(bone_xps)
+    if bounds is None:
+        log.warning("render_totalbody_bone_overlay: body column bounds unavailable")
+        return None
+
+    pages = render_xps_pages(bone_xps, dpi=dpi)
+    if not pages:
+        log.info("render_totalbody_bone_overlay: mutool unavailable — skipping ROI overlay")
+        return None
+
+    try:
+        png_bytes = _bounds_to_png(pages[0], bounds, dpi, label='bone_roi')
+        return Image.open(io.BytesIO(png_bytes)).convert('RGB')
+    except Exception as e:
+        log.warning("render_totalbody_bone_overlay crop failed: %s", e)
+        return None
+
+
 def extract_totalbody_images(bone_xps: str, comp_xps: str = None) -> dict:
     """
     Extract key images from total-body XPS files.
