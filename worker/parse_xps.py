@@ -1028,20 +1028,23 @@ def _strip_nums_stacked(
     disc_ys: list[float],
     fpage: str,
 ) -> dict[str, list[tuple[int, float]]]:
-    """Return {region: [(strip_num, y), ...]} for stacked layout."""
-    def cy(b: tuple) -> float:
-        return (b[2] + b[4]) / 2
+    """Return {region: [(strip_num, y), ...]} for stacked layout.
+    Zones are detected from Y-gaps between strips — not disclaimer positions —
+    so an extended spine (D11/D12 extra strips) never overflows into the hip zone.
+    """
+    sorted_boxes = sorted(strip_boxes, key=lambda b: b[2])
 
-    if not disc_ys:
-        zones: list[list[tuple]] = [strip_boxes]
-    else:
-        zones = [[] for _ in disc_ys]
-        for b in strip_boxes:
-            for zi, dy in enumerate(disc_ys):
-                if cy(b) < dy:
-                    zones[zi].append(b)
-                    break
-        zones = [z for z in zones if z]
+    # Cluster strips by Y-gap: a gap > 50 XPS units between consecutive strip
+    # bottoms and tops signals a new scan zone.
+    zones: list[list[tuple]] = []
+    current: list[tuple] = []
+    for b in sorted_boxes:
+        if current and b[2] - max(c[4] for c in current) > 50:
+            zones.append(current)
+            current = []
+        current.append(b)
+    if current:
+        zones.append(current)
 
     glyphs = _fpage_glyphs(fpage)
     used: set[str] = set()
