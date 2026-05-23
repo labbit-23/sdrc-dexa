@@ -233,60 +233,91 @@ class UploadBody(BaseModel):
 
 # ── Archive MDB endpoints ─────────────────────────────────────────────────────
 
-def _archive_path() -> str:
-    p = (config.ARCHIVE_MDB_PATH or '').strip()
-    return p
+def _archive_paths() -> list[dict]:
+    """Return list of {path, label} dicts for all configured archive MDBs."""
+    from pathlib import Path as _Path
+    return [
+        {'path': p, 'label': _Path(p).stem}
+        for p in config.ARCHIVE_MDB_PATHS
+    ]
 
 
 @app.get('/archive/status')
 def archive_status():
-    """Check whether the archive MDB is configured and readable."""
-    path = _archive_path()
-    if not path:
-        return {'available': False, 'reason': 'ARCHIVE_MDB_PATH not set in .env'}
+    """Check whether any archive MDB is configured and readable."""
     from pathlib import Path as _Path
-    if not _Path(path).exists():
-        return {'available': False, 'path': path, 'reason': 'File not found at configured path'}
-    return {'available': True, 'path': path}
+    archives = _archive_paths()
+    if not archives:
+        return {'available': False, 'reason': 'ARCHIVE_MDB_PATH not set in .env', 'archives': []}
+    out = []
+    for a in archives:
+        exists = _Path(a['path']).exists()
+        out.append({**a, 'available': exists,
+                    'reason': None if exists else 'File not found at configured path'})
+    return {'available': any(a['available'] for a in out), 'archives': out}
 
 
 @app.get('/archive/all')
 def archive_all(q: Optional[str] = None, max_count: int = 500):
-    """All patients from the archive MDB, optional name/MRN filter."""
-    path = _archive_path()
-    if not path:
+    """All patients from all archive MDBs, tagged with archive_label."""
+    from pathlib import Path as _Path
+    archives = _archive_paths()
+    if not archives:
         raise HTTPException(status_code=503, detail='ARCHIVE_MDB_PATH not configured')
-    try:
-        patients = get_all_patients_from_path(path, max_count=max_count)
-    except Exception as e:
-        raise HTTPException(status_code=503, detail={'error': str(e), 'bmd_offline': False})
+    merged: list[dict] = []
+    seen:   set[str]   = set()
+    for a in archives:
+        if not _Path(a['path']).exists():
+            log.warning('archive_all: skipping missing %s', a['path'])
+            continue
+        try:
+            patients = get_all_patients_from_path(a['path'], max_count=max_count)
+        except Exception as e:
+            log.warning('archive_all: error reading %s: %s', a['label'], e)
+            continue
+        for p in patients:
+            pid = (p.get('patient') or {}).get('patient_id', '')
+            if pid not in seen:
+                seen.add(pid)
+                merged.append({**p, 'archive_label': a['label']})
     if q:
         ql = q.lower()
-        patients = [
-            p for p in patients
-            if ql in (p['patient'].get('patient_id') or '').lower()
-            or ql in (p['patient'].get('name') or '').lower()
+        merged = [
+            p for p in merged
+            if ql in ((p['patient'].get('patient_id') or '').lower())
+            or ql in ((p['patient'].get('name') or '').lower())
         ]
-    return _jsonify(patients)
+    return _jsonify(merged)
 
 
 @app.post('/archive/trend/{patient_id}')
-def archive_trend(patient_id: str, body: TrendBody):
-    """Upload a trend record from the archive MDB (no XPS)."""
-    path = _archive_path()
-    if not path:
+def archive_trend(patient_id: str, body: TrendBody, mdb: Optional[str] = None):
+    """Upload a trend record from an archive MDB (no XPS). Pass ?mdb=label to target a specific archive."""
+    from pathlib import Path as _Path
+    archives = _archive_paths()
+    if not archives:
         raise HTTPException(status_code=503, detail='ARCHIVE_MDB_PATH not configured')
-    msgs: list[str] = []
-    try:
-        result = upload_patient_trend(
-            patient_id, body.scan_type,
-            progress_cb=lambda m: msgs.append(m),
-            mdb_path=path,
-        )
-        return {'ok': True, 'messages': msgs, 'result': _jsonify(result)}
-    except Exception as e:
-        log.exception('archive trend upload failed: %s', e)
-        raise HTTPException(status_code=500, detail=str(e))
+    if mdb:
+        candidates = [a for a in archives if a['label'] == mdb]
+        if not candidates:
+            raise HTTPException(status_code=404, detail=f'Archive "{mdb}" not found')
+    else:
+        candidates = [a for a in archives if _Path(a['path']).exists()]
+    last_error: Exception | None = None
+    for a in candidates:
+        msgs: list[str] = []
+        try:
+            result = upload_patient_trend(
+                patient_id, body.scan_type,
+                progress_cb=lambda m: msgs.append(m),
+                mdb_path=a['path'],
+            )
+            return {'ok': True, 'messages': msgs, 'result': _jsonify(result), 'archive': a['label']}
+        except Exception as e:
+            log.warning('archive trend: %s not found in %s: %s', patient_id, a['label'], e)
+            last_error = e
+    log.exception('archive trend upload failed for %s: %s', patient_id, last_error)
+    raise HTTPException(status_code=500, detail=str(last_error))
 
 
 @app.post('/upload/{patient_id}')
