@@ -491,26 +491,19 @@ def _region_bounds_stacked(
     fpage: str,
 ) -> dict[str, tuple[float, float, float, float]]:
     """
-    Stacked layout: use disclaimer Y positions as zone dividers.
-    Strip with y-centroid < disc_ys[i] (and >= disc_ys[i-1]) → zone i.
-    Zone names are resolved from nearby XAML glyph text.
+    Stacked layout: detect zones by Y-gap between consecutive strips (gap > 50 XPS units).
+    Region names come from "Densitometry Reference:" text in the gap BEFORE each zone.
     """
-    def cy(b: tuple) -> float:
-        return (b[2] + b[4]) / 2
-
-    if not disc_ys:
-        # No disclaimers: single zone
-        zones: list[list[tuple]] = [strip_boxes]
-    else:
-        zones = [[] for _ in disc_ys]
-        for b in strip_boxes:
-            c = cy(b)
-            for zi, dy in enumerate(disc_ys):
-                if c < dy:
-                    zones[zi].append(b)
-                    break
-            # strips beyond the last disclaimer are ignored (shouldn't be scan content)
-        zones = [z for z in zones if z]
+    sorted_boxes = sorted(strip_boxes, key=lambda b: b[2])
+    zones: list[list[tuple]] = []
+    current: list[tuple] = []
+    for b in sorted_boxes:
+        if current and b[2] - max(c[4] for c in current) > 50:
+            zones.append(current)
+            current = []
+        current.append(b)
+    if current:
+        zones.append(current)
 
     if not zones:
         return {}
@@ -522,9 +515,9 @@ def _region_bounds_stacked(
     for zi, zone in enumerate(zones):
         zone_y_top    = min(b[2] for b in zone)
         zone_y_bottom = max(b[4] for b in zone)
-        # Search text in the region below the scan image, up to next zone's scan start
-        next_zone_top = min(b[2] for b in zones[zi + 1]) if zi + 1 < len(zones) else zone_y_bottom + 600
-        name = _zone_region_name(glyphs, zone_y_bottom - 10, next_zone_top, used)
+        # "Densitometry Reference:" label appears in the gap BEFORE each zone
+        prev_bottom = max(b[4] for b in zones[zi - 1]) if zi > 0 else 0.0
+        name = _zone_region_name(glyphs, prev_bottom, zone_y_top, used)
         used.add(name)
 
         box = _make_region_box(zone, disc_ys)
@@ -1051,9 +1044,12 @@ def _strip_nums_stacked(
     result: dict[str, list[tuple[int, float]]] = {}
 
     for zi, zone in enumerate(zones):
+        zone_y_top    = min(b[2] for b in zone)
         zone_y_bottom = max(b[4] for b in zone)
-        next_top = min(b[2] for b in zones[zi + 1]) if zi + 1 < len(zones) else zone_y_bottom + 600
-        name = _zone_region_name(glyphs, zone_y_bottom - 10, next_top, used)
+        # "Densitometry Reference:" label appears in the gap BEFORE each zone, not within it.
+        # Search from the previous zone's bottom (or 0 for zone 0) up to this zone's top.
+        prev_bottom = max(b[4] for b in zones[zi - 1]) if zi > 0 else 0.0
+        name = _zone_region_name(glyphs, prev_bottom, zone_y_top, used)
         used.add(name)
         result[name] = _dedup_strips_by_num(zone)
 
