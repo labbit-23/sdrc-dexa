@@ -215,6 +215,326 @@ def _parse_dual_femur_bounds(xps_path: str) -> dict[str, tuple[float, float, flo
     return result
 
 
+# ── Position-based region extraction (replaces hardcoded strip ranges) ────────
+
+_STRIP_VP_RE = re.compile(
+    r'ImageSource="[^"]*Images/(\d+)\.PNG"[^/]*?Viewport="([\d.]+),([\d.]+),([\d.]+),([\d.]+)"'
+    r'|'
+    r'Viewport="([\d.]+),([\d.]+),([\d.]+),([\d.]+)"[^/]*?ImageSource="[^"]*Images/(\d+)\.PNG"',
+    re.IGNORECASE | re.DOTALL,
+)
+
+_GLYPH_RE = re.compile(
+    r'OriginX="([\d.]+)"\s+OriginY="([\d.]+)"\s+'
+    r'(?:[A-Za-z]+="[^"]*"\s+)*?'
+    r'Indices="[^"]*"\s+'
+    r'UnicodeString="([^"]+)"',
+)
+
+
+def _collect_strip_viewports(xps_path: str) -> tuple[str, list[tuple[int, float, float, float, float]]]:
+    """
+    Open the XPS ZIP, identify valid scan strips (non-RGBA, h≥20, w≥100),
+    parse their Viewport positions from the fpage XAML, and return
+    (fpage_text, [(strip_num, x, y, x2, y2), ...]).
+
+    Strips that appear at identical positions (same num+x+y) are deduplicated —
+    GE Lunar reuses strip 1 as a header row in both hip columns.
+    """
+    try:
+        with zipfile.ZipFile(xps_path) as z:
+            fpage = z.read("Documents/1/Pages/1.fpage").decode("utf-8", errors="replace")
+            valid: set[int] = set()
+            for name in z.namelist():
+                if 'Images' not in name or not name.upper().endswith('.PNG'):
+                    continue
+                try:
+                    num = int(name.split('/')[-1].split('.')[0])
+                    img = Image.open(io.BytesIO(z.read(name)))
+                    if img.mode != 'RGBA' and img.height >= 20 and img.width >= 100:
+                        valid.add(num)
+                except Exception:
+                    pass
+    except Exception:
+        return '', []
+
+    seen: set[tuple] = set()
+    boxes: list[tuple[int, float, float, float, float]] = []
+    for m in _STRIP_VP_RE.finditer(fpage):
+        if m.group(1):
+            num = int(m.group(1))
+            x, y, w, h = float(m.group(2)), float(m.group(3)), float(m.group(4)), float(m.group(5))
+        else:
+            num = int(m.group(9))
+            x, y, w, h = float(m.group(5)), float(m.group(6)), float(m.group(7)), float(m.group(8))
+        if num not in valid or w < 5 or h < 2:
+            continue
+        key = (num, round(x, 1), round(y, 1))
+        if key in seen:
+            continue
+        seen.add(key)
+        boxes.append((num, x, y, x + w, y + h))
+
+    return fpage, boxes
+
+
+def _disclaimer_ys(fpage: str) -> list[float]:
+    """Return Y positions of all 'Image not for diagnosis' glyphs, sorted ascending."""
+    ys: list[float] = []
+    for m in re.finditer(r'UnicodeString="[^"]*not\s+for\s+diagnosis[^"]*"', fpage, re.IGNORECASE):
+        start = fpage.rfind('<Glyphs', 0, m.start())
+        ctx = fpage[max(0, start if start != -1 else m.start() - 8000): m.start()]
+        found = re.findall(r'OriginY="([\d.]+)"', ctx)
+        if found:
+            ys.append(float(found[-1]))
+    return sorted(ys)
+
+
+def _fpage_glyphs(fpage: str) -> list[tuple[float, float, str]]:
+    """Extract all (x, y, text) glyph tuples from a fpage string."""
+    return [
+        (float(x), float(y), t.strip())
+        for x, y, t in _GLYPH_RE.findall(fpage)
+        if t.strip()
+    ]
+
+
+def _zone_region_name(
+    glyphs: list[tuple[float, float, str]],
+    y_search_lo: float,
+    y_search_hi: float,
+    used: set[str],
+) -> str:
+    """
+    Classify a Y zone as 'spine', 'left_femur', or 'right_femur' by searching
+    XAML glyph text between y_search_lo and y_search_hi.
+
+    Looks for "Densitometry Reference:" lines (the most reliable anchor) first,
+    then falls back to keyword presence near the zone boundary.
+    Used names are skipped so each region is assigned at most once.
+    """
+    zone_text = ' '.join(
+        t for _, y, t in glyphs
+        if y_search_lo <= y <= y_search_hi
+    ).lower()
+
+    # "Densitometry Reference: AP Spine / Lumbar Spine" → spine
+    if re.search(r'densitometry\s+reference[^.]{0,60}(?:ap\s+spine|lumbar)', zone_text):
+        name = 'spine'
+    # "Densitometry Reference: Left …" → left_femur
+    elif re.search(r'densitometry\s+reference[^.]{0,60}left', zone_text):
+        name = 'left_femur'
+    # "Densitometry Reference: Right …" → right_femur
+    elif re.search(r'densitometry\s+reference[^.]{0,60}right', zone_text):
+        name = 'right_femur'
+    # Broader keyword fallback
+    elif re.search(r'\b(?:lumbar|ap\s+spine|l1[-–]l4)\b', zone_text) and 'spine' not in used:
+        name = 'spine'
+    elif re.search(r'\bleft\b', zone_text) and re.search(r'\b(?:femur|proximal|hip|neck)\b', zone_text) and 'left_femur' not in used:
+        name = 'left_femur'
+    elif re.search(r'\bright\b', zone_text) and re.search(r'\b(?:femur|proximal|hip|neck)\b', zone_text) and 'right_femur' not in used:
+        name = 'right_femur'
+    else:
+        # Pure positional fallback: spine → left_femur → right_femur
+        for candidate in ('spine', 'left_femur', 'right_femur'):
+            if candidate not in used:
+                name = candidate
+                break
+        else:
+            name = f'region_{len(used)}'
+
+    return name if name not in used else f'region_{len(used)}'
+
+
+def _dedup_strips_by_num(
+    strip_boxes: list[tuple[int, float, float, float, float]],
+) -> list[tuple[int, float]]:
+    """
+    Return [(strip_num, y_start), ...] sorted by Y, with each strip number
+    appearing only once (earliest Y occurrence kept).
+
+    GE Lunar reuses strip 1 as a shared header row in both hip columns of a
+    side-by-side page; without deduplication it would be stitched twice.
+    """
+    seen: set[int] = set()
+    result: list[tuple[int, float]] = []
+    for b in sorted(strip_boxes, key=lambda b: b[2]):  # sort by y_start
+        if b[0] not in seen:
+            seen.add(b[0])
+            result.append((b[0], b[2]))
+    return result
+
+
+def _x_gap_clusters(values: list[float], gap: float = 50.0) -> list[list[float]]:
+    """Split a sorted list of floats into clusters separated by gaps > *gap*."""
+    if not values:
+        return []
+    clusters: list[list[float]] = [[values[0]]]
+    for v in sorted(values)[1:]:
+        if v - clusters[-1][-1] > gap:
+            clusters.append([])
+        clusters[-1].append(v)
+    return clusters
+
+
+def _make_region_box(
+    strip_boxes: list[tuple[int, float, float, float, float]],
+    all_disc_ys: list[float],
+) -> tuple[float, float, float, float]:
+    """
+    Build (x1, y1, x2, y2) bounding box exactly matching the strip Viewport extents.
+    Bottom is capped just below the nearest 'Image not for diagnosis' disclaimer
+    to exclude that text from the rendered overlay.
+    No artificial margins — strips define the exact scan boundary.
+    """
+    x1 = min(b[1] for b in strip_boxes)
+    y1 = min(b[2] for b in strip_boxes)
+    x2 = max(b[3] for b in strip_boxes)
+    y2 = max(b[4] for b in strip_boxes)
+
+    local_disc = [d for d in all_disc_ys if d > y1 and d < y2 + 300]
+    if local_disc:
+        cap = min(local_disc) - 30
+        if cap > y1 + 20:
+            y2 = min(y2, cap)
+
+    return (x1, y1, x2, y2)
+
+
+def _parse_region_bounds_by_position(
+    xps_path: str,
+) -> dict[str, tuple[float, float, float, float]]:
+    """
+    Position-driven scan region extraction.  Replaces the hardcoded strip-number
+    range tables in _parse_all_strip_bounds() and _parse_dual_femur_bounds().
+
+    Works for all GE Lunar XPS formats used at SDRC:
+
+    ┌─────────────────────┬──────────────────────────────────────────┐
+    │ Format              │ Detection                                │
+    ├─────────────────────┼──────────────────────────────────────────┤
+    │ Stacked combined    │ Single X column, multiple Y zones        │
+    │ (spine/L-hip/R-hip) │ separated by "Image not for diagnosis"   │
+    │                     │ disclaimers                              │
+    ├─────────────────────┼──────────────────────────────────────────┤
+    │ Side-by-side hips   │ Two distinct X columns (gap > 50 units); │
+    │ (L-hip | R-hip)     │ lower-X column → left_femur,             │
+    │                     │ higher-X column → right_femur            │
+    ├─────────────────────┼──────────────────────────────────────────┤
+    │ Single scan         │ One X column, one Y zone                 │
+    │ (spine only, etc.)  │                                          │
+    └─────────────────────┴──────────────────────────────────────────┘
+
+    Region names are inferred from "Densitometry Reference:" XAML text near
+    each zone — no hardcoded strip numbers, no OCR.
+
+    Returns {region_name: (x1, y1, x2, y2)} for each detected region.
+    """
+    fpage, strip_boxes = _collect_strip_viewports(xps_path)
+    if not strip_boxes:
+        log.warning("_parse_region_bounds_by_position: no valid strips in %s", xps_path)
+        return {}
+
+    disc_ys = _disclaimer_ys(fpage)
+    log.info("_parse_region_bounds_by_position: %d strips, %d disclaimers Y=%s in %s",
+             len(strip_boxes), len(disc_ys), disc_ys, Path(xps_path).name)
+
+    # ── Layout detection ──────────────────────────────────────────────────────
+    x_clusters = _x_gap_clusters([b[1] for b in strip_boxes], gap=50.0)
+
+    if len(x_clusters) >= 2:
+        # Side-by-side: multiple X columns — name each column from text below it
+        return _region_bounds_sidebyside(strip_boxes, x_clusters, disc_ys, fpage)
+    else:
+        # Stacked: single X column, split by disclaimer Y zones
+        return _region_bounds_stacked(strip_boxes, disc_ys, fpage)
+
+
+def _region_bounds_sidebyside(
+    strip_boxes: list[tuple[int, float, float, float, float]],
+    x_clusters: list[list[float]],
+    disc_ys: list[float],
+    fpage: str,
+) -> dict[str, tuple[float, float, float, float]]:
+    """
+    Side-by-side layout: assign each X column to a named region by reading the
+    XAML glyph text below that column's scan strips — not by positional assumption.
+    """
+    sorted_clusters = sorted(x_clusters, key=lambda c: min(c))
+    boundaries = [float('-inf')] + [
+        (max(sorted_clusters[i]) + min(sorted_clusters[i + 1])) / 2
+        for i in range(len(sorted_clusters) - 1)
+    ] + [float('inf')]
+
+    glyphs = _fpage_glyphs(fpage)
+    used: set[str] = set()
+    result: dict[str, tuple[float, float, float, float]] = {}
+
+    for idx in range(len(sorted_clusters)):
+        x_lo, x_hi = boundaries[idx], boundaries[idx + 1]
+        col = [b for b in strip_boxes if x_lo < b[1] <= x_hi]
+        if not col:
+            continue
+        col_y_bottom = max(b[4] for b in col)
+        # Search text below this column for region identification
+        name = _zone_region_name(glyphs, col_y_bottom - 10, col_y_bottom + 600, used)
+        used.add(name)
+        result[name] = _make_region_box(col, disc_ys)
+        log.info("_region_bounds_sidebyside: %s → %d strips, box=%s", name, len(col), result[name])
+
+    return result
+
+
+def _region_bounds_stacked(
+    strip_boxes: list[tuple[int, float, float, float, float]],
+    disc_ys: list[float],
+    fpage: str,
+) -> dict[str, tuple[float, float, float, float]]:
+    """
+    Stacked layout: use disclaimer Y positions as zone dividers.
+    Strip with y-centroid < disc_ys[i] (and >= disc_ys[i-1]) → zone i.
+    Zone names are resolved from nearby XAML glyph text.
+    """
+    def cy(b: tuple) -> float:
+        return (b[2] + b[4]) / 2
+
+    if not disc_ys:
+        # No disclaimers: single zone
+        zones: list[list[tuple]] = [strip_boxes]
+    else:
+        zones = [[] for _ in disc_ys]
+        for b in strip_boxes:
+            c = cy(b)
+            for zi, dy in enumerate(disc_ys):
+                if c < dy:
+                    zones[zi].append(b)
+                    break
+            # strips beyond the last disclaimer are ignored (shouldn't be scan content)
+        zones = [z for z in zones if z]
+
+    if not zones:
+        return {}
+
+    glyphs = _fpage_glyphs(fpage)
+    used: set[str] = set()
+    result: dict[str, tuple[float, float, float, float]] = {}
+
+    for zi, zone in enumerate(zones):
+        zone_y_top    = min(b[2] for b in zone)
+        zone_y_bottom = max(b[4] for b in zone)
+        # Search text in the region below the scan image, up to next zone's scan start
+        next_zone_top = min(b[2] for b in zones[zi + 1]) if zi + 1 < len(zones) else zone_y_bottom + 600
+        name = _zone_region_name(glyphs, zone_y_bottom - 10, next_zone_top, used)
+        used.add(name)
+
+        box = _make_region_box(zone, disc_ys)
+        result[name] = box
+        log.info("_region_bounds_stacked: zone %d → %s  %d strips  y=%.0f–%.0f  box=%s",
+                 zi, name, len(zone), zone_y_top, zone_y_bottom, box)
+
+    return result
+
+
 def _parse_single_scan_bounds(xps_path: str) -> tuple[float, float, float, float] | None:
     """
     Return crop bounds for a SINGLE-scan XPS (spine-only, or one femur).
@@ -391,8 +711,11 @@ def _auto_trim(img: Image.Image, bg_threshold: int = 230, padding: int = 12) -> 
     return img.crop((left, top, right, bottom))
 
 
-def _bounds_to_png(page_png_bytes: bytes, bounds: tuple, dpi: int, label: str = '') -> bytes:
-    """Crop a rendered page PNG to XPS-unit bounds, auto-trim, return PNG bytes."""
+def _bounds_to_png(page_png_bytes: bytes, bounds: tuple, dpi: int, label: str = '',
+                   trim: bool = True) -> bytes:
+    """Crop a rendered page PNG to XPS-unit bounds, return PNG bytes.
+    trim=True applies _auto_trim (good for spine); trim=False keeps exact strip extents (femur).
+    """
     x1_xps, y1_xps, x2_xps, y2_xps = bounds
     scale = dpi / 96.0
     img = Image.open(io.BytesIO(page_png_bytes))
@@ -404,13 +727,23 @@ def _bounds_to_png(page_png_bytes: bytes, bounds: tuple, dpi: int, label: str = 
         min(h, int(y2_xps * scale)),
     )
     if box[2] <= box[0] or box[3] <= box[1]:
-        log.warning("_bounds_to_png: invalid box %s for %s — skipping cap, using full strip height", box, label)
+        log.warning("_bounds_to_png: invalid box %s for %s — using full strip height", box, label)
         box = (box[0], box[1], max(box[0] + 1, box[2]), max(box[1] + 1, min(h, int(y2_xps * scale))))
-    cropped = _auto_trim(img.crop(box))
+    cropped = _auto_trim(img.crop(box)) if trim else img.crop(box)
     log.info("crop %s: %dx%d → %dx%d", label, w, h, cropped.width, cropped.height)
     buf = io.BytesIO()
     cropped.save(buf, 'PNG', optimize=True)
     return buf.getvalue()
+
+
+def _has_scan_content(png_bytes: bytes, min_dark_fraction: float = 0.01) -> bool:
+    """Return True if the PNG contains enough dark pixels to be a real scan image.
+    Rejects GE Lunar 'No image records match search criteria' placeholders.
+    """
+    img = Image.open(io.BytesIO(png_bytes)).convert('L')
+    arr = np.array(img)
+    dark = (arr < 80).sum()
+    return dark / arr.size >= min_dark_fraction
 
 
 def crop_xps_scan_image(page_png_bytes: bytes, xps_path: str, dpi: int = 200) -> bytes:
@@ -604,12 +937,6 @@ def _parse_femur_block(text: str) -> dict:
 
 
 # ── Image extraction ───────────────────────────────────────────────────────
-_STRIP_ASSIGNMENTS = {
-    'spine':       range(1, 10),    # strips 1-9
-    'left_femur':  range(10, 19),   # strips 10-18
-    'right_femur': range(19, 29),   # strips 19-28  (strip 29 = colour-scale bar, RGBA)
-}
-
 
 def _has_scan_images(xps_path: str) -> bool:
     """Quick check: does this XPS contain embedded scan strip images?"""
@@ -624,42 +951,110 @@ def _has_scan_images(xps_path: str) -> bool:
 def extract_scan_images(xps_path: str) -> dict[str, Image.Image]:
     """
     Returns {'spine': PIL.Image, 'left_femur': PIL.Image, 'right_femur': PIL.Image}
-    Images are stitched from PNG strips and false-coloured.
+    for whichever regions are present.
 
-    GE Lunar strip layout (verified on SDRC hardware):
-      Strips 1–9   → AP Spine
-      Strips 10–18 → Left Femur  (strip 10 is a thin separator — skipped)
-      Strips 19–29 → Right Femur (strip 19 is a thin separator, 29 is RGBA logo — both skipped)
-
-    Strips are skipped if they are:
-      • RGBA mode (logos / overlays)
-      • Height < 20 px (separator lines)
+    Uses position-based region detection (_parse_region_bounds_by_position) to
+    group strips by scan region — not hardcoded strip-number ranges.  Handles
+    both stacked (spine/L-hip/R-hip) and side-by-side (L-hip | R-hip) layouts.
     """
-    results = {}
-    with zipfile.ZipFile(xps_path) as zf:
-        available = {n for n in zf.namelist() if n.startswith('Documents/1/Resources/Images/')}
-        for label, nums in _STRIP_ASSIGNMENTS.items():
-            strips = []
-            for n in nums:
-                path = f'Documents/1/Resources/Images/{n}.PNG'
-                if path not in available:
-                    break
-                try:
-                    data = zf.read(path)
-                    img = Image.open(io.BytesIO(data))
-                    # Skip RGBA logos and thin separator lines
-                    if img.mode == 'RGBA' or img.height < 20:
-                        log.debug("Skipping strip %d for %s (%s %dx%d)", n, label, img.mode, img.width, img.height)
-                        continue
-                    strips.append(img.convert('RGB'))
-                except Exception as e:
-                    log.warning("Skipping strip %d for %s: %s", n, label, e)
-                    break
-            if strips:
-                results[label] = _stitch_and_crop(strips)
-            else:
-                log.warning("No usable strips found for %s in %s", label, xps_path)
+    fpage, strip_boxes = _collect_strip_viewports(xps_path)
+    if not strip_boxes:
+        log.warning("extract_scan_images: no valid strips in %s", xps_path)
+        return {}
+
+    disc_ys = _disclaimer_ys(fpage)
+    x_clusters = _x_gap_clusters([b[1] for b in strip_boxes], gap=50.0)
+
+    if len(x_clusters) >= 2:
+        region_strip_nums = _strip_nums_sidebyside(strip_boxes, x_clusters, fpage)
+    else:
+        region_strip_nums = _strip_nums_stacked(strip_boxes, disc_ys, fpage)
+
+    results: dict[str, Image.Image] = {}
+    try:
+        with zipfile.ZipFile(xps_path) as zf:
+            for region, strip_info in region_strip_nums.items():
+                # strip_info: list of (strip_num, y_position) sorted by y
+                strips: list[Image.Image] = []
+                for num, _y in strip_info:
+                    path = f'Documents/1/Resources/Images/{num}.PNG'
+                    try:
+                        img = Image.open(io.BytesIO(zf.read(path))).convert('RGB')
+                        strips.append(img)
+                    except Exception as e:
+                        log.warning("extract_scan_images: could not read strip %d for %s: %s", num, region, e)
+                if strips:
+                    results[region] = _stitch_and_crop(strips)
+                else:
+                    log.warning("extract_scan_images: no strips for %s in %s", region, xps_path)
+    except Exception as e:
+        log.warning("extract_scan_images: ZIP read failed for %s: %s", xps_path, e)
+
     return results
+
+
+def _strip_nums_sidebyside(
+    strip_boxes: list[tuple[int, float, float, float, float]],
+    x_clusters: list[list[float]],
+    fpage: str,
+) -> dict[str, list[tuple[int, float]]]:
+    """Return {region: [(strip_num, y), ...]} for side-by-side layout.
+    Region names come from text below each column, not positional order."""
+    sorted_clusters = sorted(x_clusters, key=lambda c: min(c))
+    boundaries = [float('-inf')] + [
+        (max(sorted_clusters[i]) + min(sorted_clusters[i + 1])) / 2
+        for i in range(len(sorted_clusters) - 1)
+    ] + [float('inf')]
+
+    glyphs = _fpage_glyphs(fpage)
+    used: set[str] = set()
+    result: dict[str, list[tuple[int, float]]] = {}
+
+    for idx in range(len(sorted_clusters)):
+        x_lo, x_hi = boundaries[idx], boundaries[idx + 1]
+        col = [b for b in strip_boxes if x_lo < b[1] <= x_hi]
+        if not col:
+            continue
+        col_y_bottom = max(b[4] for b in col)
+        name = _zone_region_name(glyphs, col_y_bottom - 10, col_y_bottom + 600, used)
+        used.add(name)
+        result[name] = _dedup_strips_by_num(col)
+
+    return result
+
+
+def _strip_nums_stacked(
+    strip_boxes: list[tuple[int, float, float, float, float]],
+    disc_ys: list[float],
+    fpage: str,
+) -> dict[str, list[tuple[int, float]]]:
+    """Return {region: [(strip_num, y), ...]} for stacked layout."""
+    def cy(b: tuple) -> float:
+        return (b[2] + b[4]) / 2
+
+    if not disc_ys:
+        zones: list[list[tuple]] = [strip_boxes]
+    else:
+        zones = [[] for _ in disc_ys]
+        for b in strip_boxes:
+            for zi, dy in enumerate(disc_ys):
+                if cy(b) < dy:
+                    zones[zi].append(b)
+                    break
+        zones = [z for z in zones if z]
+
+    glyphs = _fpage_glyphs(fpage)
+    used: set[str] = set()
+    result: dict[str, list[tuple[int, float]]] = {}
+
+    for zi, zone in enumerate(zones):
+        zone_y_bottom = max(b[4] for b in zone)
+        next_top = min(b[2] for b in zones[zi + 1]) if zi + 1 < len(zones) else zone_y_bottom + 600
+        name = _zone_region_name(glyphs, zone_y_bottom - 10, next_top, used)
+        used.add(name)
+        result[name] = _dedup_strips_by_num(zone)
+
+    return result
 
 
 def _stitch_and_crop(strips: list[Image.Image]) -> Image.Image:
@@ -795,9 +1190,9 @@ def _crop_to_roi_bottom(img: Image.Image, margin_px: int = 10) -> Image.Image:
 
 
 def render_osteo_overlay_pages(
-    spine_xps: str,
-    left_femur_xps: str,
-    right_femur_xps: str,
+    spine_xps: str = None,
+    left_femur_xps: str = None,
+    right_femur_xps: str = None,
     dpi: int = 200,
 ) -> dict[str, bytes]:
     """
@@ -827,67 +1222,56 @@ def render_osteo_overlay_pages(
 
     out: dict[str, bytes] = {}
 
-    def _femur_png(img: Image.Image) -> bytes:
-        img = _crop_to_roi_bottom(img)
-        buf = io.BytesIO()
-        img.save(buf, 'PNG', optimize=True)
-        return buf.getvalue()
+    _FEMUR_SLOTS = ('left_femur_overlay', 'right_femur_overlay')
+    _FEMUR_REGIONS = ('left_femur', 'right_femur')
+
+    def _render_region(page_png: bytes, bounds: tuple, key: str) -> bytes | None:
+        """Crop page_png to exact strip bounds — no auto_trim for any region."""
+        raw = _bounds_to_png(page_png, bounds, dpi, label=key, trim=False)
+        if not _has_scan_content(raw):
+            log.info("render_osteo_overlay_pages: no scan content in %s — skipping", key)
+            return None
+        return raw
 
     if dual_femur_only:
-        # Dual femur XPS: read actual ImageBrush Viewport bounds from the XPS XML,
-        # split strips by Y centroid into top (left femur) and bottom (right femur).
         pages = render_xps_pages(left_femur_xps, dpi=dpi)
         if not pages:
             return out
-        region_bounds = _parse_dual_femur_bounds(left_femur_xps)
+        region_bounds = _parse_region_bounds_by_position(left_femur_xps)
         for region, key in [('left_femur', 'left_femur_overlay'), ('right_femur', 'right_femur_overlay')]:
             if region in region_bounds:
-                raw = _bounds_to_png(pages[0], region_bounds[region], dpi, label=key)
-                img = Image.open(io.BytesIO(raw)).convert('RGB')
-                out[key] = _femur_png(img)
+                result = _render_region(pages[0], region_bounds[region], key)
+                if result:
+                    out[key] = result
             else:
                 log.warning("render_osteo_overlay_pages: no bounds for %s in dual-femur XPS", region)
         return out
 
     if all_three_same:
-        # Combined XPS: single page with all three scans stacked vertically.
-        # Render once, then crop each region using per-strip Viewport bounds.
         pages = render_xps_pages(spine_xps, dpi=dpi)
         if not pages:
             return out
         page_png = pages[0]
-        region_bounds = _parse_all_strip_bounds(spine_xps)
+        region_bounds = _parse_region_bounds_by_position(spine_xps)
         for region, key in [
             ('spine',       'spine_overlay'),
             ('left_femur',  'left_femur_overlay'),
             ('right_femur', 'right_femur_overlay'),
         ]:
             if region in region_bounds:
-                out[key] = _bounds_to_png(page_png, region_bounds[region], dpi, label=key)
+                result = _render_region(page_png, region_bounds[region], key)
+                if result:
+                    out[key] = result
             else:
                 log.warning("render_osteo_overlay_pages: no strip bounds for %s", region)
-
-        # Normalise both femur PNGs to identical pixel dimensions.
-        # PAD (white canvas) not stretch — preserves content scale so both
-        # images look the same size inside the CSS height:200px container.
-        if 'left_femur_overlay' in out and 'right_femur_overlay' in out:
-            lf_img = _crop_to_roi_bottom(Image.open(io.BytesIO(out['left_femur_overlay'])).convert('RGB'))
-            rf_img = _crop_to_roi_bottom(Image.open(io.BytesIO(out['right_femur_overlay'])).convert('RGB'))
-            tw = max(lf_img.width,  rf_img.width)
-            th = max(lf_img.height, rf_img.height)
-            for slot, img in [('left_femur_overlay', lf_img), ('right_femur_overlay', rf_img)]:
-                if img.width != tw or img.height != th:
-                    canvas = Image.new('RGB', (tw, th), (255, 255, 255))
-                    canvas.paste(img, ((tw - img.width) // 2, 0))
-                    img = canvas
-                buf = io.BytesIO()
-                img.save(buf, 'PNG', optimize=True)
-                out[slot] = buf.getvalue()
-            log.info("render_osteo_overlay_pages: normalised femur PNGs to %dx%d", tw, th)
-
         return out
 
     # Separate XPS files — each has its own single page
+    _slot_to_region = {
+        'spine_overlay':       'spine',
+        'left_femur_overlay':  'left_femur',
+        'right_femur_overlay': 'right_femur',
+    }
     for label, path in [
         ('spine_overlay',       spine_xps),
         ('left_femur_overlay',  left_femur_xps),
@@ -898,14 +1282,14 @@ def render_osteo_overlay_pages(
         pages = render_xps_pages(path, dpi=dpi)
         if not pages:
             continue
-        raw = crop_xps_scan_image(pages[0], path, dpi=dpi)
-        if label in ('left_femur_overlay', 'right_femur_overlay'):
-            img = _crop_to_roi_bottom(Image.open(io.BytesIO(raw)).convert('RGB'))
-            buf = io.BytesIO()
-            img.save(buf, 'PNG', optimize=True)
-            out[label] = buf.getvalue()
-        else:
-            out[label] = raw
+        region_bounds = _parse_region_bounds_by_position(path)
+        target_region = _slot_to_region[label]
+        if target_region not in region_bounds:
+            log.warning("render_osteo_overlay_pages: no bounds for %s in %s", target_region, path)
+            continue
+        result = _render_region(pages[0], region_bounds[target_region], label)
+        if result:
+            out[label] = result
 
     return out
 
