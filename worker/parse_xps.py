@@ -1188,6 +1188,48 @@ def _crop_to_roi_bottom(img: Image.Image, margin_px: int = 10) -> Image.Image:
     return img.crop((0, 0, img.width, bottom))
 
 
+def _extend_femur_bounds_and_trim_top(
+    page_png: bytes,
+    bounds: tuple[float, float, float, float],
+    dpi: int,
+    label: str,
+    extension_xps: float = 80.0,
+) -> bytes | None:
+    """
+    Render a femur overlay crop with the top boundary extended upward by
+    `extension_xps` XPS units, then scan downward from the top of that
+    extended margin to find the first non-white row (the ROI triangle tip).
+    Crops the image there (with a small pad) so the tip is never clipped.
+
+    The extension is applied only to y1; spine and total-body paths are
+    not affected — this function is called exclusively for femur overlays.
+    """
+    x1, y1, x2, y2 = bounds
+    extended_bounds = (x1, max(0.0, y1 - extension_xps), x2, y2)
+    raw = _bounds_to_png(page_png, extended_bounds, dpi, label=label, trim=False)
+    if raw is None:
+        return None
+
+    img = Image.open(io.BytesIO(raw))
+    arr = np.array(img)
+    margin_px = int(extension_xps * dpi / 96)
+
+    # Scan only within the extended margin for the first non-white row
+    search = arr[:margin_px]
+    mask = search.mean(axis=2) < 230  # ROI lines are clearly darker than near-white
+    rows = np.any(mask, axis=1)
+    if rows.any():
+        tip_row = int(np.where(rows)[0][0])
+        crop_top = max(0, tip_row - 3)
+    else:
+        crop_top = margin_px  # no tip found in margin — start at strip content
+
+    cropped = img.crop((0, crop_top, img.width, img.height))
+    buf = io.BytesIO()
+    cropped.save(buf, 'PNG', optimize=True)
+    return buf.getvalue()
+
+
 def render_osteo_overlay_pages(
     spine_xps: str = None,
     left_femur_xps: str = None,
@@ -1226,8 +1268,12 @@ def render_osteo_overlay_pages(
 
     def _render_region(page_png: bytes, bounds: tuple, key: str) -> bytes | None:
         """Crop page_png to exact strip bounds — no auto_trim for any region."""
-        raw = _bounds_to_png(page_png, bounds, dpi, label=key, trim=False)
-        if not _has_scan_content(raw):
+        is_femur = key in _FEMUR_SLOTS
+        if is_femur:
+            raw = _extend_femur_bounds_and_trim_top(page_png, bounds, dpi, label=key)
+        else:
+            raw = _bounds_to_png(page_png, bounds, dpi, label=key, trim=False)
+        if not raw or not _has_scan_content(raw):
             log.info("render_osteo_overlay_pages: no scan content in %s — skipping", key)
             return None
         return raw
