@@ -1225,6 +1225,32 @@ def _extend_femur_bounds_and_trim_top(
         crop_top = margin_px  # no tip found in margin — start at strip content
 
     cropped = img.crop((0, crop_top, img.width, img.height))
+
+    # Bottom trim: remove "Image not for diagnosis" text + horizontal rule that
+    # sometimes appears at the bottom of the captured region.
+    # Strategy: scan up from bottom — skip trailing white, skip text/rule block,
+    # then find where the white gap above the text starts → crop there.
+    arr_b = np.array(cropped)
+    row_bright = arr_b.mean(axis=(1, 2))
+    h = arr_b.shape[0]
+    crop_bottom = h
+    if h > 20:
+        r = h - 1
+        # Phase 1: skip trailing white rows
+        while r > h // 2 and row_bright[r] > 240:
+            r -= 1
+        # Phase 2: skip non-white block (text + rule line)
+        while r > h // 2 and row_bright[r] <= 240:
+            r -= 1
+        # Phase 3: if we're now in a white gap above the text, scan up to scan content
+        if row_bright[r] > 240 and r > h // 2:
+            while r > 0 and row_bright[r] > 240:
+                r -= 1
+            crop_bottom = min(h, r + 4)  # last scan-content row + small pad
+
+    if crop_bottom < h:
+        cropped = cropped.crop((0, 0, cropped.width, crop_bottom))
+
     buf = io.BytesIO()
     cropped.save(buf, 'PNG', optimize=True)
     return buf.getvalue()
