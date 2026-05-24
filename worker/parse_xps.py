@@ -1214,15 +1214,19 @@ def _extend_femur_bounds_and_trim_top(
     arr = np.array(img)
     margin_px = int(extension_xps * dpi / 96)
 
-    # Scan only within the extended margin for the first non-white row
-    search = arr[:margin_px]
-    mask = search.mean(axis=2) < 230  # ROI lines are clearly darker than near-white
+    # Search only the LOWER 60% of the extended margin for the triangle tip.
+    # The triangle tip is at most ~75 XPS units above y1 (= bottom of margin),
+    # so it lives in the lower portion.  The upper portion may contain text from
+    # the previous zone ("Image not for diagnosis") which must be excluded.
+    search_start = int(margin_px * 0.4)  # skip top 40% of margin
+    search = arr[search_start:margin_px]
+    mask = search.mean(axis=2) < 230
     rows = np.any(mask, axis=1)
     if rows.any():
-        tip_row = int(np.where(rows)[0][0])
+        tip_row = search_start + int(np.where(rows)[0][0])
         crop_top = max(0, tip_row - 3)
     else:
-        crop_top = margin_px  # no tip found in margin — start at strip content
+        crop_top = margin_px  # no tip found — start at strip content
 
     cropped = img.crop((0, crop_top, img.width, img.height))
 
