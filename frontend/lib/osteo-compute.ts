@@ -5,8 +5,9 @@ import type {
 
 function classify(t: number | null | undefined): OsteoClassification {
   if (t == null) return 'normal'
-  if (t <= -2.5) return 'osteoporosis'
-  if (t <= -1.0) return 'osteopenia'
+  const t1 = Math.round(t * 10) / 10  // round to 1dp — matches displayed value
+  if (t1 <= -2.5) return 'osteoporosis'
+  if (t1 <= -1.0) return 'osteopenia'
   return 'normal'
 }
 
