@@ -51,11 +51,15 @@ export type OsteoReportData = {
     spine_class:     OsteoClassification
     left_neck_t:     number | null
     right_neck_t:    number | null
-    lowest_hip_t:    number | null   // min of both neck T-scores
+    lowest_hip_t:    number | null   // ISCD: min of Neck and Total Hip, excluding implant sides
+    lowest_hip_z:    number | null
     lowest_hip_side: 'left' | 'right' | null
+    lowest_hip_site: 'neck' | 'total' | null   // which sub-region drives the ISCD T-score
     hip_bilateral:   boolean              // both sides round to same 1-dp value
     overall_class:   OsteoClassification  // WHO: lowest T across all sites
     premenopausal:   boolean              // female < 50 → Z-score language
+    left_implant:    boolean              // left femur has implant artifact (T or Z > +4)
+    right_implant:   boolean              // right femur has implant artifact
   }
   images: {
     spine_url?:        string

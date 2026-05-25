@@ -15,6 +15,16 @@ function lowestT(...vals: (number | null | undefined)[]): number | null {
   return valid.length ? Math.min(...valid) : null
 }
 
+// T or Z > +4 on any diagnostic sub-region indicates prosthesis artifact
+function isImplantSide(femur: FemurRegions): boolean {
+  for (const key of ['Neck', 'Total'] as const) {
+    const r = femur[key]
+    if (!r) continue
+    if ((r.T != null && r.T > 4) || (r.Z != null && r.Z > 4)) return true
+  }
+  return false
+}
+
 function parseRegion(raw: Record<string, unknown>): OsteoRegion | undefined {
   const bmd = parseFloat(raw.bmd as string)
   if (isNaN(bmd) || bmd === 0) return undefined
@@ -82,9 +92,12 @@ export function computeOsteoData(
   const left_neck_t  = left_femur.Neck?.T  ?? null
   const right_neck_t = right_femur.Neck?.T ?? null
 
-  // ISCD: use Femoral Neck or Total Hip (use Total if available, else Neck)
-  const leftHipT  = left_femur.Total?.T  ?? left_neck_t
-  const rightHipT = right_femur.Total?.T ?? right_neck_t
+  const left_implant  = isImplantSide(left_femur)
+  const right_implant = isImplantSide(right_femur)
+
+  // ISCD: lowest of Femoral Neck and Total Hip; exclude prosthesis sides
+  const leftHipT  = left_implant  ? null : lowestT(left_femur.Total?.T, left_neck_t)
+  const rightHipT = right_implant ? null : lowestT(right_femur.Total?.T, right_neck_t)
   const lowest_hip_t = lowestT(leftHipT, rightHipT)
 
   // Bilateral = both sides present and round to the same 1-dp value
@@ -97,6 +110,18 @@ export function computeOsteoData(
     : leftHipT == null ? 'right'
     : rightHipT == null ? 'left'
     : leftHipT <= rightHipT ? 'left' : 'right'
+
+  const lowestFemur = lowest_hip_side === 'right' ? right_femur : lowest_hip_side === 'left' ? left_femur : null
+  const lowest_hip_z = lowestFemur?.Total?.Z ?? lowestFemur?.Neck?.Z ?? null
+
+  let lowest_hip_site: 'neck' | 'total' | null = null
+  if (lowestFemur && !left_implant && !right_implant) {
+    const neckT  = lowestFemur.Neck?.T  ?? null
+    const totalT = lowestFemur.Total?.T ?? null
+    if (neckT != null && totalT != null) lowest_hip_site = neckT <= totalT ? 'neck' : 'total'
+    else if (neckT  != null) lowest_hip_site = 'neck'
+    else if (totalT != null) lowest_hip_site = 'total'
+  }
 
   const overall_t = lowestT(spine_t, leftHipT, rightHipT)
   const overall_class = classify(overall_t)
@@ -133,10 +158,14 @@ export function computeOsteoData(
       left_neck_t,
       right_neck_t,
       lowest_hip_t,
+      lowest_hip_z,
       lowest_hip_side,
+      lowest_hip_site,
       hip_bilateral,
       overall_class,
       premenopausal,
+      left_implant,
+      right_implant,
     },
     images: {
       spine_url:       `${imageBaseUrl}/img_spine.png`,
