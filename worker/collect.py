@@ -305,11 +305,10 @@ def upload_patient_trend(patient_id: str, scan_type: str,
     notify = progress_cb or (lambda msg: log.info(msg))
 
     notify(f'Reading MDB for {patient_id}…')
-    snapshot   = mdb_snapshot(patient_id, mdb_path=mdb_path)
-    snap_bytes = json.dumps(snapshot, indent=2).encode()
+    snapshot = mdb_snapshot(patient_id, mdb_path=mdb_path)
 
     notify('Uploading trend data to Supabase…')
-    result = upload_trend_scan(patient_id, snap_bytes, scan_type, notify)
+    result = upload_trend_scan(patient_id, snapshot, scan_type, notify)
     notify('Done — trend data linked.')
     return result
 
