@@ -111,6 +111,85 @@ def get_uploaded_mrns_with_type() -> dict[str, str]:
         return {}
 
 
+def get_recent_scans_by_source(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+) -> dict:
+    """
+    Query Supabase for all scans in date range, grouped by source type.
+    Includes patient info. Deduplicates XPS scans by (patient_id, scan_date, scan_type),
+    keeping latest by created_at (handles re-extracted scans with updated ROIs).
+
+    Returns {
+        'xps_scans': [{id, patient_id, scan_date, scan_type, created_at,
+                       bmd_patients: {patient_id, first_name, ...}}, ...],
+        'archive_scans': [...]
+    }
+
+    XPS scans: scan_type NOT IN ('osteo_trend', 'total_body_trend')
+    Archive scans: scan_type IN ('osteo_trend', 'total_body_trend')
+    """
+    try:
+        headers = {
+            'Authorization': f"Bearer {config.SUPABASE_KEY}",
+            'apikey':        config.SUPABASE_KEY,
+        }
+        rest = f"{config.SUPABASE_URL}/rest/v1"
+
+        # Join bmd_scans with bmd_patients to get patient info
+        # Select scan + minimal patient fields
+        params = [
+            ('select', 'id,patient_id,scan_date,scan_type,xps_filename,created_at,updated_at,'
+                      'bmd_patients(patient_id,first_name,last_name,gender,dob)'),
+            ('order', 'scan_date.desc,created_at.desc'),
+        ]
+
+        if date_from:
+            params.append(('scan_date', f'gte.{date_from}T00:00:00Z'))
+        if date_to:
+            params.append(('scan_date', f'lte.{date_to}T23:59:59Z'))
+
+        # Fetch all scans in range with patient details
+        r = httpx.get(
+            f"{rest}/bmd_scans",
+            params=params,
+            headers=headers,
+            timeout=15,
+        )
+        r.raise_for_status()
+        all_scans = r.json() or []
+
+        # Separate by source and deduplicate XPS scans
+        xps_scans = []
+        archive_scans = []
+        seen_xps = set()  # (patient_id, scan_date_str, scan_type)
+
+        for scan in all_scans:
+            scan_type = scan.get('scan_type', 'osteo')
+            is_archive = scan_type in ('osteo_trend', 'total_body_trend')
+
+            if is_archive:
+                archive_scans.append(scan)
+            else:
+                # Deduplicate XPS scans: keep only latest (by created_at) per timestamp
+                pid = scan.get('patient_id')
+                sdate = str(scan.get('scan_date') or '')[:10]  # YYYY-MM-DD only
+                key = (pid, sdate, scan_type)
+
+                if key not in seen_xps:
+                    seen_xps.add(key)
+                    xps_scans.append(scan)
+
+        return {
+            'xps_scans': xps_scans,
+            'archive_scans': archive_scans,
+        }
+
+    except Exception as e:
+        log.warning("get_recent_scans_by_source failed: %s", e)
+        return {'xps_scans': [], 'archive_scans': []}
+
+
 # ── PDF storage ───────────────────────────────────────────────────────────
 def upload_pdf(patient_id: str, scan_date: datetime, pdf_bytes: bytes) -> str:
     """Upload PDF to Supabase Storage bucket 'pdfs'. Returns public URL."""

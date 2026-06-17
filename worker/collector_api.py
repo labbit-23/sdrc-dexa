@@ -9,7 +9,7 @@ import json
 import logging
 import queue
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 import uvicorn
@@ -27,7 +27,7 @@ from collect import (
     upload_patient_raw,
     upload_patient_trend,
 )
-from sync_supabase import check_scan_exists, get_uploaded_mrns, get_uploaded_mrns_with_type
+from sync_supabase import check_scan_exists, get_uploaded_mrns, get_uploaded_mrns_with_type, get_recent_scans_by_source
 
 log = logging.getLogger(__name__)
 
@@ -136,10 +136,15 @@ def recent(
     date_to:   Optional[str] = None,
 ):
     """
-    Recent patients + XPS status + Supabase duplicate flag.
+    Recent patients + scans from MDB (available to upload), with Supabase supplement info.
 
     Pass date_from / date_to (ISO date strings, e.g. '2026-05-01') to query a
     specific date range instead of the rolling `hours` window.
+
+    Returns array of scan records from MDB, each with:
+    - patient info (name, MRN, etc.)
+    - scan_date, scan_type, XPS filename
+    - exists_in_db: whether this scan date is already uploaded to Supabase
     """
     from_dt: Optional[datetime] = None
     to_dt:   Optional[datetime] = None
@@ -156,13 +161,14 @@ def recent(
         patients = get_recent_patients(date_from=from_dt, date_to=to_dt, hours=hours)
     except Exception as e:
         _mdb_error(e)
+
+    # Return ALL scans per patient (not deduplicated), so user can upload each separately
     out = []
     for info in patients:
         pid      = info['patient'].get('patient_id', '')
         sd       = info.get('scan_date')
         date_str = sd.strftime('%Y-%m-%d') if sd else ''
         exists   = bool(date_str and check_scan_exists(pid, date_str))
-        # Use all sessions if available; fall back to single session for compat
         sessions = info.get('sessions') or [info.get('session', {})]
         components = _derive_scan_components(sessions)
         out.append({**_jsonify(info), 'exists_in_db': exists, **components})
