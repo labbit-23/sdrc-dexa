@@ -808,7 +808,8 @@ def upload_trend_scan(mrn: str, raw_json_bytes: bytes, scan_type: str,
                       progress_cb=None) -> dict:
     """
     Upload MDB-only historical data as a trend record — no Storage, no XPS.
-    Creates / updates bmd_patients and bmd_scans rows only.
+    Creates bmd_scans rows only (no bmd_patients entry).
+    Links to existing patient by MRN if available, otherwise creates scan without patient_id.
     scan_type must be 'osteo_trend' or 'total_body_trend'.
     Returns {'patient_uuid', 'scan_uuid', 'scan_type'}.
     """
@@ -818,7 +819,6 @@ def upload_trend_scan(mrn: str, raw_json_bytes: bytes, scan_type: str,
 
     # Extract patient + first exam from snapshot
     pat_handle = next(iter(snapshot.get('patients', {}).keys()), f'mrn_{mrn}')
-    patient_data = snapshot.get('patients', {}).get(pat_handle, {})
     first_exam   = (snapshot.get('exams') or [{}])[0]
 
     scan_date_raw = first_exam.get('_acq_dt', '')
@@ -832,41 +832,33 @@ def upload_trend_scan(mrn: str, raw_json_bytes: bytes, scan_type: str,
     }
     rest = f'{config.SUPABASE_URL}/rest/v1'
 
-    # ── bmd_patients ─────────────────────────────────────────────────────────
-    dob = patient_data.get('dob')
-    if hasattr(dob, 'isoformat'):
-        dob = dob.isoformat()
-    pat_row = {
-        'pat_handle': pat_handle,
-        'patient_id': patient_data.get('patient_id', mrn),
-        'mrn':        mrn,
-        'first_name': patient_data.get('name', ''),
-        'last_name':  patient_data.get('title', ''),
-        'dob':        (str(dob) if dob else None),
-        'gender':     patient_data.get('gender', ''),
-        'height_cm':  patient_data.get('height_cm') or None,
-        'weight_kg':  patient_data.get('weight_kg') or None,
-        'physician':  patient_data.get('physician', ''),
-        'updated_at': datetime.utcnow().isoformat(),
-    }
-    r = httpx.post(f'{rest}/bmd_patients?on_conflict=pat_handle',
-                   headers=db_headers, content=json.dumps(pat_row), timeout=30)
-    r.raise_for_status()
-    patient_uuid = r.json()[0]['id']
-    notify(f'  Patient upserted: {patient_uuid}')
+    # Find existing patient by MRN
+    patient_uuid = None
+    try:
+        r = httpx.get(f'{rest}/bmd_patients?mrn=eq.{mrn}&select=id',
+                      headers=db_headers, timeout=10)
+        r.raise_for_status()
+        patients = r.json()
+        if patients:
+            patient_uuid = patients[0]['id']
+            notify(f'  Linked to existing patient: {patient_uuid}')
+    except Exception as e:
+        notify(f'  Warning: could not find existing patient for MRN {mrn}: {e}')
 
     # ── bmd_scans ─────────────────────────────────────────────────────────────
     # Suffix '_t' distinguishes trend handle from a real scan on the same date
     scan_handle = f'{pat_handle}_{scan_date_str[:10]}_t'
     scan_row = {
-        'patient_id':  patient_uuid,
         'scan_handle': scan_handle,
         'scan_date':   scan_date_str or None,
         'scan_type':   scan_type,
         'image_paths': {},
         'raw_json':    raw_json_bytes.decode(),
-        'updated_at':  datetime.utcnow().isoformat(),  # Track when archive data was last updated
+        'updated_at':  datetime.utcnow().isoformat(),
     }
+    if patient_uuid:
+        scan_row['patient_id'] = patient_uuid
+
     r = httpx.post(f'{rest}/bmd_scans?on_conflict=scan_handle',
                    headers=db_headers, content=json.dumps(scan_row), timeout=30)
     r.raise_for_status()
