@@ -342,7 +342,33 @@ def build_raw_osteo_json(mrn: str, scan_index: int = 0, scan_date: str = None) -
         for pat, sess in pat_sessions:
             sess_date_str = str(sess.get('scan_date', ''))[:10]
             if sess_date_str == target_date_str:
-                return {'patient': pat, 'session': sess}
+                # Build structured dict like the normal return
+                return {
+                    'patient': {
+                        'pat_handle':  pat['pat_handle'],
+                        'patient_id':  pat['patient_id'],
+                        'mrn':         mrn,
+                        'name':        pat.get('name', ''),
+                        'title':       pat.get('title', ''),
+                        'dob':         pat['dob'].isoformat() if pat.get('dob') else '',
+                        'gender':      pat.get('gender', 'Female'),
+                        'ethnicity':   pat.get('ethnicity', ''),
+                        'height_cm':   pat.get('height_cm') or 0,
+                        'weight_kg':   pat.get('weight_kg') or 0,
+                        'bmi':         pat.get('bmi') or 0,
+                        'physician':   pat.get('physician', ''),
+                    },
+                    'session': {
+                        'scan_date':      sess.get('scan_date', ''),
+                        'scanner_serial': sess.get('scanner_serial') or config.SCANNER_ID,
+                        'software':       sess.get('software') or config.SOFTWARE,
+                        'ntx_filename':   sess.get('ntx_filename'),
+                        'spine':                 sess.get('spine', {}),
+                        'left_femur':            sess.get('left_femur', {}),
+                        'right_femur':           sess.get('right_femur', {}),
+                        'estimated_composition': sess.get('estimated_composition', {}),
+                    }
+                }
         raise RuntimeError(
             f"No osteo scan found for MRN '{mrn}' on date {target_date_str}.\n"
             f"Available dates: {', '.join(str(s[1].get('scan_date', ''))[:10] for s in pat_sessions)}"
