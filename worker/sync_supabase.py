@@ -857,7 +857,7 @@ def upload_trend_scan(mrn: str, raw_json_bytes: bytes, scan_type: str,
         'scan_date':   scan_date_str or None,
         'scan_type':   scan_type,
         'image_paths': {},
-        'raw_json':    raw_json_bytes.decode(),
+        'raw_json':    snapshot,  # Pass dict, not string, so JSONB stores properly
         'updated_at':  datetime.utcnow().isoformat(),
     }
     if patient_uuid:
