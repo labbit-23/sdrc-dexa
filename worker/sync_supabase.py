@@ -717,93 +717,40 @@ def sync_scan(patient: dict, session: dict, merged: dict, pdf_bytes: bytes) -> d
 def upload_patient_trend(patient_id: str, scan_type: str,
                         progress_cb=None, mdb_path: str = None) -> dict:
     """
-    Upload MDB-only trend data for a patient from the specified MDB.
-    Extracts patient data from MDB, converts to raw JSON, and uploads as trend.
-
-    @param patient_id: MRN or patient ID
-    @param scan_type: 'osteo_trend' or 'total_body_trend'
-    @param progress_cb: optional callback for progress messages
-    @param mdb_path: path to archive MDB file (required)
-    @returns: result dict from upload_trend_scan
+    Upload MDB-only trend data using the same mdb_snapshot() parser as regular scans.
+    This ensures consistency: same data structure, same parsing logic, just skip XPS.
     """
+    from collect import mdb_snapshot
     from parse_mdb import MdbParser
-    import json
 
     notify = progress_cb or (lambda m: log.info(m))
 
     if not mdb_path:
         raise ValueError('mdb_path required for archive trend upload')
 
-    notify(f'Reading archive MDB from {mdb_path}')
-    parser = MdbParser(mdb_path)
+    notify(f'Reading MDB for {patient_id}…')
+    # Use the same mdb_snapshot() function that works for regular scans
+    raw_data = mdb_snapshot(patient_id, mdb_path=mdb_path)
 
-    # Find patient in archive
+    # Validate that patient has the requested scan type
+    parser = MdbParser(mdb_path)
     pat_handles = [
         ph for ph, row in parser._patients.items()
         if row.get('patient_id', '').strip() == str(patient_id)
     ]
     if not pat_handles:
-        raise RuntimeError(f'Patient {patient_id} not found in archive MDB')
+        raise RuntimeError(f'Patient {patient_id} not found in MDB')
 
-    # Get patient data and sessions
-    pat_handle = pat_handles[0]
-    patient_row = parser._patients[pat_handle]
-    # Convert datetime objects to strings for JSON serialization
-    if isinstance(patient_row.get('dob'), datetime):
-        patient_row = {**patient_row, 'dob': patient_row['dob'].isoformat()}
-    pat = parser._parse_patient(parser._patients[pat_handle])
-    sessions = parser.get_scan_sessions(pat_handle)
-
-    if not sessions:
-        raise RuntimeError(f'No sessions found for {patient_id} in archive MDB')
-
-    # Find session matching requested scan type
+    sessions = parser.get_scan_sessions(pat_handles[0])
     expected_type = 'osteo' if scan_type == 'osteo_trend' else 'total_body'
     matching_sessions = [s for s in sessions if s.get('mdb_scan_type') == expected_type]
     if not matching_sessions:
         available = ', '.join(set(s.get('mdb_scan_type', 'unknown') for s in sessions))
         raise RuntimeError(
-            f'Archive patient {patient_id} has no {expected_type} scan. Available: {available}'
+            f'Patient {patient_id} has no {expected_type} scan. Available: {available}'
         )
-    latest_session = matching_sessions[0]
 
-    # Build raw JSON snapshot (same structure as fetch)
-    raw_data = {
-        'mdb_snapshot': {
-            'patient_id': patient_id,
-            'snapshot_ts': datetime.utcnow().isoformat(),
-            'patients': {pat_handle: patient_row},
-            'exams': parser._exams,
-            'composition': parser._composition,
-            'densitometry': parser._densitometry,
-        },
-        'patient': {
-            'pat_handle': pat['pat_handle'],
-            'patient_id': pat['patient_id'],
-            'mrn': str(patient_id),
-            'name': pat.get('name', ''),
-            'title': pat.get('title', ''),
-            'dob': pat['dob'].isoformat() if pat.get('dob') else '',
-            'gender': pat.get('gender', 'Female'),
-            'ethnicity': pat.get('ethnicity', ''),
-            'height_cm': pat.get('height_cm') or 0,
-            'weight_kg': pat.get('weight_kg') or 0,
-            'bmi': pat.get('bmi') or 0,
-            'physician': pat.get('physician', ''),
-        },
-        'session': {
-            'scan_date': latest_session.get('scan_date', ''),
-            'scanner_serial': latest_session.get('scanner_serial') or config.SCANNER_ID,
-            'software': latest_session.get('software') or config.SOFTWARE,
-            'ntx_filename': latest_session.get('ntx_filename'),
-            'spine': latest_session.get('spine', {}),
-            'left_femur': latest_session.get('left_femur', {}),
-            'right_femur': latest_session.get('right_femur', {}),
-            'estimated_composition': latest_session.get('estimated_composition', {}),
-        }
-    }
-
-    notify(f'Uploading {scan_type} for {patient_id}')
+    notify('Uploading trend data to Supabase…')
     return upload_trend_scan(str(patient_id), raw_data, scan_type, progress_cb=progress_cb)
 
 
