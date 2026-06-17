@@ -168,8 +168,10 @@ def recent(
         pid       = info['patient'].get('patient_id', '')
         sd        = info.get('scan_date')
         scan_date_iso = sd.isoformat() if sd else ''
-        scan_type = info.get('mdb_scan_type', 'osteo')
-        exists    = bool(scan_date_iso and check_scan_exists(pid, scan_date_iso, scan_type))
+        # Use actual scan_type from info, not the mapped mdb_scan_type
+        # Supabase stores the real scan_type (spine_femur, total_body, etc.)
+        actual_scan_type = info.get('scan_type')
+        exists    = bool(scan_date_iso and check_scan_exists(pid, scan_date_iso, actual_scan_type))
         sessions  = info.get('sessions') or [info.get('session', {})]
         components = _derive_scan_components(sessions)
         out.append({**_jsonify(info), 'exists_in_db': exists, **components})
