@@ -289,7 +289,11 @@ def archive_all(q: Optional[str] = None, max_count: int = 500):
             pid = (p.get('patient') or {}).get('patient_id', '')
             if pid not in seen:
                 seen.add(pid)
-                merged.append({**p, 'archive_label': a['label']})
+                sessions = p.get('sessions', [])
+                has_total_body = any(s.get('mdb_scan_type') == 'total_body' for s in sessions)
+                has_osteo = any(s.get('mdb_scan_type') == 'osteo' for s in sessions)
+                mdb_scan_type = 'total_body' if has_total_body else 'osteo' if has_osteo else None
+                merged.append({**p, 'archive_label': a['label'], 'has_total_body': has_total_body, 'has_osteo': has_osteo, 'mdb_scan_type': mdb_scan_type})
     if q:
         ql = q.lower()
         merged = [
