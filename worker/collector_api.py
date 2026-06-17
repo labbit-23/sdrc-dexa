@@ -25,9 +25,14 @@ from collect import (
     get_all_patients_from_path,
     get_recent_patients,
     upload_patient_raw,
+)
+from sync_supabase import (
+    check_scan_exists,
+    get_uploaded_mrns,
+    get_uploaded_mrns_with_type,
+    get_recent_scans_by_source,
     upload_patient_trend,
 )
-from sync_supabase import check_scan_exists, get_uploaded_mrns, get_uploaded_mrns_with_type, get_recent_scans_by_source
 
 log = logging.getLogger(__name__)
 
