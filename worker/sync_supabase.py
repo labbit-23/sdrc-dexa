@@ -843,9 +843,11 @@ def upload_trend_scan(mrn: str, raw_json_bytes: bytes, scan_type: str,
         patients = r.json()
         if patients:
             patient_uuid = patients[0]['id']
-            notify(f'  Linked to existing patient: {patient_uuid}')
+            notify(f'  Linked to existing patient {mrn}: {patient_uuid}')
+        else:
+            notify(f'  Warning: patient {mrn} not found in bmd_patients - scan will be created without patient link')
     except Exception as e:
-        notify(f'  Warning: could not find existing patient for MRN {mrn}: {e}')
+        notify(f'  Warning: error searching for patient {mrn}: {e}')
 
     # ── bmd_scans ─────────────────────────────────────────────────────────────
     # Suffix '_t' distinguishes trend handle from a real scan on the same date
