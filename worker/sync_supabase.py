@@ -768,7 +768,7 @@ def upload_patient_trend(patient_id: str, scan_type: str,
     raw_data = {
         'mdb_snapshot': {
             'patient_id': patient_id,
-            'snapshot_ts': str(parser.snapshot_ts),
+            'snapshot_ts': datetime.utcnow().isoformat(),
             'patients': {pat_handle: patient_row},
             'exams': parser.exams,
             'composition': parser._composition,
