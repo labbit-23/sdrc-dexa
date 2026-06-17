@@ -771,6 +771,8 @@ def upload_patient_trend(patient_id: str, scan_type: str,
             'snapshot_ts': str(parser.snapshot_ts),
             'patients': {pat_handle: patient_row},
             'exams': parser.exams,
+            'composition': parser._composition,
+            'densitometry': parser._densitometry,
         },
         'patient': {
             'pat_handle': pat['pat_handle'],
