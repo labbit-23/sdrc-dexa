@@ -27,15 +27,11 @@ def _get_client() -> Client:
 # ── Duplicate scan check ──────────────────────────────────────────────────
 def check_scan_exists(mrn: str, scan_date: str, scan_type: Optional[str] = None) -> bool:
     """
-    Return True if a scan already exists in Supabase for this MRN on this date.
+    Return True if a scan already exists in Supabase for this MRN with this exact timestamp.
     If scan_type is provided, also match on scan_type (osteo, total_body, etc).
-    scan_date must be YYYY-MM-DD (date portion only — ignores time).
+    scan_date should be an ISO timestamp (e.g. 2026-06-13T11:17:31.977600).
     """
     try:
-        date_str = str(scan_date)[:10]   # ensure YYYY-MM-DD
-        next_day = (
-            datetime.strptime(date_str, '%Y-%m-%d').replace(hour=23, minute=59, second=59)
-        ).strftime('%Y-%m-%dT23:59:59')
         headers = {
             'Authorization': f"Bearer {config.SUPABASE_KEY}",
             'apikey':        config.SUPABASE_KEY,
@@ -55,11 +51,10 @@ def check_scan_exists(mrn: str, scan_date: str, scan_type: Optional[str] = None)
 
         patient_uuid = patients[0]['id']
 
-        # Step 2: look for scan on that date, optionally filtered by scan_type
+        # Step 2: look for scan with exact timestamp and optional scan_type
         params = [
             ('patient_id', f'eq.{patient_uuid}'),
-            ('scan_date',  f'gte.{date_str}T00:00:00'),
-            ('scan_date',  f'lte.{next_day}'),
+            ('scan_date',  f'eq.{scan_date}'),
             ('select',     'id'),
             ('limit',      '1'),
         ]

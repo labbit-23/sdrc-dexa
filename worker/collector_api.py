@@ -167,9 +167,9 @@ def recent(
     for info in patients:
         pid       = info['patient'].get('patient_id', '')
         sd        = info.get('scan_date')
-        date_str  = sd.strftime('%Y-%m-%d') if sd else ''
+        scan_date_iso = sd.isoformat() if sd else ''
         scan_type = info.get('mdb_scan_type', 'osteo')
-        exists    = bool(date_str and check_scan_exists(pid, date_str, scan_type))
+        exists    = bool(scan_date_iso and check_scan_exists(pid, scan_date_iso, scan_type))
         sessions  = info.get('sessions') or [info.get('session', {})]
         components = _derive_scan_components(sessions)
         out.append({**_jsonify(info), 'exists_in_db': exists, **components})
