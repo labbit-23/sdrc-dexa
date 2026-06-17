@@ -75,6 +75,7 @@ def check_scan_exists(mrn: str, scan_date: str, scan_type: Optional[str] = None)
 
     except Exception as e:
         log.warning("check_scan_exists(%s, %s, %s) failed: %s", mrn, scan_date, scan_type, e)
+        return False  # Fail gracefully — assume not uploaded on error
 
 
 def get_uploaded_mrns() -> set[str]:
