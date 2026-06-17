@@ -51,10 +51,15 @@ def check_scan_exists(mrn: str, scan_date: str, scan_type: Optional[str] = None)
 
         patient_uuid = patients[0]['id']
 
-        # Step 2: look for scan with exact timestamp and optional scan_type
+        # Step 2: look for scan matching date and scan_type
+        # Match by date (YYYY-MM-DD) since timestamps may have precision differences
+        date_str = str(scan_date)[:10]  # Extract YYYY-MM-DD
+        date_start = f'{date_str} 00:00:00+00'
+        date_end = f'{date_str} 23:59:59+00'
         params = [
             ('patient_id', f'eq.{patient_uuid}'),
-            ('scan_date',  f'eq.{scan_date}'),
+            ('scan_date',  f'gte.{date_start}'),
+            ('scan_date',  f'lte.{date_end}'),
             ('select',     'id'),
             ('limit',      '1'),
         ]
