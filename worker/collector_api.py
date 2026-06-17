@@ -165,11 +165,12 @@ def recent(
     # Return ALL scans per patient (not deduplicated), so user can upload each separately
     out = []
     for info in patients:
-        pid      = info['patient'].get('patient_id', '')
-        sd       = info.get('scan_date')
-        date_str = sd.strftime('%Y-%m-%d') if sd else ''
-        exists   = bool(date_str and check_scan_exists(pid, date_str))
-        sessions = info.get('sessions') or [info.get('session', {})]
+        pid       = info['patient'].get('patient_id', '')
+        sd        = info.get('scan_date')
+        date_str  = sd.strftime('%Y-%m-%d') if sd else ''
+        scan_type = info.get('mdb_scan_type', 'osteo')
+        exists    = bool(date_str and check_scan_exists(pid, date_str, scan_type))
+        sessions  = info.get('sessions') or [info.get('session', {})]
         components = _derive_scan_components(sessions)
         out.append({**_jsonify(info), 'exists_in_db': exists, **components})
     return out

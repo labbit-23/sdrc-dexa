@@ -25,9 +25,10 @@ def _get_client() -> Client:
 
 
 # ── Duplicate scan check ──────────────────────────────────────────────────
-def check_scan_exists(mrn: str, scan_date: str) -> bool:
+def check_scan_exists(mrn: str, scan_date: str, scan_type: Optional[str] = None) -> bool:
     """
     Return True if a scan already exists in Supabase for this MRN on this date.
+    If scan_type is provided, also match on scan_type (osteo, total_body, etc).
     scan_date must be YYYY-MM-DD (date portion only — ignores time).
     """
     try:
@@ -54,23 +55,26 @@ def check_scan_exists(mrn: str, scan_date: str) -> bool:
 
         patient_uuid = patients[0]['id']
 
-        # Step 2: look for any scan on that date (list-of-tuples allows dup keys)
+        # Step 2: look for scan on that date, optionally filtered by scan_type
+        params = [
+            ('patient_id', f'eq.{patient_uuid}'),
+            ('scan_date',  f'gte.{date_str}T00:00:00'),
+            ('scan_date',  f'lte.{next_day}'),
+            ('select',     'id'),
+            ('limit',      '1'),
+        ]
+        if scan_type:
+            params.append(('scan_type', f'eq.{scan_type}'))
         r = httpx.get(
             f"{rest}/bmd_scans",
-            params=[
-                ('patient_id', f'eq.{patient_uuid}'),
-                ('scan_date',  f'gte.{date_str}T00:00:00'),
-                ('scan_date',  f'lte.{next_day}'),
-                ('select',     'id'),
-                ('limit',      '1'),
-            ],
+            params=params,
             headers=headers, timeout=10,
         )
         r.raise_for_status()
         return len(r.json()) > 0
 
     except Exception as e:
-        log.warning("check_scan_exists(%s, %s) failed: %s", mrn, scan_date, e)
+        log.warning("check_scan_exists(%s, %s, %s) failed: %s", mrn, scan_date, scan_type, e)
 
 
 def get_uploaded_mrns() -> set[str]:

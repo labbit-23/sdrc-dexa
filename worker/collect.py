@@ -54,7 +54,7 @@ def get_recent_patients(
         lo = hi - timedelta(hours=hours)
 
     results = []
-    seen_pids = set()
+    seen_scan_keys = set()
 
     for exam in sorted(parser._exams,
                        key=lambda e: e.get('_acq_dt') or datetime.min,
@@ -72,9 +72,14 @@ def get_recent_patients(
         if not pat_row:
             continue
         pid = pat_row.get('patient_id', '').strip()
-        if not pid or pid in seen_pids:
+        if not pid:
             continue
-        seen_pids.add(pid)
+        # Deduplicate by (patient_id, date) — return one entry per patient per day,
+        # but allow multiple days for the same patient
+        scan_key = (pid, acq.date())
+        if scan_key in seen_scan_keys:
+            continue
+        seen_scan_keys.add(scan_key)
 
         patient  = parser._parse_patient(pat_row)
 
