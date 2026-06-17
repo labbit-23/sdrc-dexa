@@ -40,6 +40,54 @@ app.add_middleware(
     allow_headers=['*'],
 )
 
+# Cache parsed MDB files to avoid reloading on every request
+_mdb_cache = {}
+
+def _get_cached_parser(mdb_path: str):
+    """Get or create a cached MdbParser for the given MDB path."""
+    if mdb_path not in _mdb_cache:
+        from parse_mdb import MdbParser
+        _mdb_cache[mdb_path] = MdbParser(mdb_path)
+    return _mdb_cache[mdb_path]
+
+def _get_all_patients_cached(mdb_path: str, max_count: int = 500) -> list[dict]:
+    """Like get_all_patients_from_path but uses cached MdbParser."""
+    parser = _get_cached_parser(mdb_path)
+    results = []
+    seen_pids = set()
+
+    for exam in sorted(parser._exams,
+                       key=lambda e: e.get('_acq_dt') or datetime.min,
+                       reverse=True):
+        pat_handle = exam.get('pat_handle', '')
+        pat_row = parser._patients.get(pat_handle)
+        if not pat_row:
+            continue
+        pid = pat_row.get('patient_id', '').strip()
+        if not pid or pid in seen_pids:
+            continue
+        seen_pids.add(pid)
+
+        patient = parser._parse_patient(pat_row)
+        all_handles = [ph for ph, row in parser._patients.items()
+                       if row.get('patient_id', '').strip() == pid]
+        all_sessions = []
+        for ph in all_handles:
+            all_sessions.extend(parser.get_scan_sessions(ph))
+        all_sessions.sort(
+            key=lambda s: s.get('scan_date') or datetime.min, reverse=True)
+        session = all_sessions[0] if all_sessions else {}
+        results.append({
+            'patient':   patient,
+            'session':   session,
+            'sessions':  all_sessions,
+            'scan_date': exam.get('_acq_dt'),
+        })
+        if len(results) >= max_count:
+            break
+
+    return results
+
 
 # ── Serialisation ─────────────────────────────────────────────────────────────
 
@@ -269,31 +317,44 @@ def archive_status():
 
 @app.get('/archive/all')
 def archive_all(q: Optional[str] = None, max_count: int = 500):
-    """All patients from all archive MDBs, tagged with archive_label."""
+    """All patients from all archive MDBs, tagged with all matching archives."""
     from pathlib import Path as _Path
     archives = _archive_paths()
     if not archives:
         raise HTTPException(status_code=503, detail='ARCHIVE_MDB_PATH not configured')
-    merged: list[dict] = []
-    seen:   set[str]   = set()
+    by_pid: dict[str, dict] = {}  # patient_id → {patient, sessions, archive_labels}
+    seen_per_archive: dict[str, int] = {}  # archive_label → count for max_count per archive
+
     for a in archives:
         if not _Path(a['path']).exists():
             log.warning('archive_all: skipping missing %s', a['path'])
             continue
         try:
-            patients = get_all_patients_from_path(a['path'], max_count=max_count)
+            patients = _get_all_patients_cached(a['path'], max_count=max_count)
         except Exception as e:
             log.warning('archive_all: error reading %s: %s', a['label'], e)
             continue
         for p in patients:
             pid = (p.get('patient') or {}).get('patient_id', '')
-            if pid not in seen:
-                seen.add(pid)
-                sessions = p.get('sessions', [])
-                has_total_body = any(s.get('mdb_scan_type') == 'total_body' for s in sessions)
-                has_osteo = any(s.get('mdb_scan_type') == 'osteo' for s in sessions)
-                mdb_scan_type = 'total_body' if has_total_body else 'osteo' if has_osteo else None
-                merged.append({**p, 'archive_label': a['label'], 'has_total_body': has_total_body, 'has_osteo': has_osteo, 'mdb_scan_type': mdb_scan_type})
+            if not pid:
+                continue
+            # Track which archives have this patient (de-dupe but keep archive list)
+            if pid not in by_pid:
+                by_pid[pid] = {**p, 'archive_labels': []}
+            if a['label'] not in by_pid[pid]['archive_labels']:
+                by_pid[pid]['archive_labels'].append(a['label'])
+
+    # Convert to list with scan type info from first archive
+    merged = []
+    for pid, p in by_pid.items():
+        sessions = p.get('sessions', [])
+        has_total_body = any(s.get('mdb_scan_type') == 'total_body' for s in sessions)
+        has_osteo = any(s.get('mdb_scan_type') == 'osteo' for s in sessions)
+        mdb_scan_type = 'total_body' if has_total_body else 'osteo' if has_osteo else None
+        # Use first archive label as default; UI can choose from archive_labels
+        archive_label = p['archive_labels'][0] if p['archive_labels'] else ''
+        merged.append({**p, 'archive_label': archive_label, 'archive_labels': p['archive_labels'], 'has_total_body': has_total_body, 'has_osteo': has_osteo, 'mdb_scan_type': mdb_scan_type})
+
     if q:
         ql = q.lower()
         merged = [
