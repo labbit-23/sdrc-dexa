@@ -748,7 +748,10 @@ def upload_patient_trend(patient_id: str, scan_type: str,
     # Get patient data and sessions
     pat_handle = pat_handles[0]
     patient_row = parser._patients[pat_handle]
-    pat = parser._parse_patient(patient_row)
+    # Convert datetime objects to strings for JSON serialization
+    if isinstance(patient_row.get('dob'), datetime):
+        patient_row = {**patient_row, 'dob': patient_row['dob'].isoformat()}
+    pat = parser._parse_patient(parser._patients[pat_handle])
     sessions = parser.get_scan_sessions(pat_handle)
 
     if not sessions:
@@ -862,7 +865,7 @@ def upload_trend_scan(mrn: str, raw_data: dict, scan_type: str,
         scan_row['patient_id'] = patient_uuid
 
     r = httpx.post(f'{rest}/bmd_scans?on_conflict=scan_handle',
-                   headers=db_headers, content=json.dumps(scan_row), timeout=30)
+                   headers=db_headers, content=json.dumps(scan_row, default=str), timeout=30)
     r.raise_for_status()
     scan_uuid = r.json()[0]['id']
     notify(f'  Scan upserted: {scan_uuid} ({scan_type})')
