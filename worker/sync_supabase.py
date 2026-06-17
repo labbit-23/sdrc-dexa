@@ -800,13 +800,11 @@ def upload_patient_trend(patient_id: str, scan_type: str,
         }
     }
 
-    raw_json_bytes = json.dumps(raw_data, indent=2, default=str).encode()
     notify(f'Uploading {scan_type} for {patient_id}')
+    return upload_trend_scan(str(patient_id), raw_data, scan_type, progress_cb=progress_cb)
 
-    return upload_trend_scan(str(patient_id), raw_json_bytes, scan_type, progress_cb=progress_cb)
 
-
-def upload_trend_scan(mrn: str, raw_json_bytes: bytes, scan_type: str,
+def upload_trend_scan(mrn: str, raw_data: dict, scan_type: str,
                       progress_cb=None) -> dict:
     """
     Upload MDB-only historical data as a trend record — no Storage, no XPS.
@@ -817,7 +815,7 @@ def upload_trend_scan(mrn: str, raw_json_bytes: bytes, scan_type: str,
     """
     notify = progress_cb or log.info
 
-    snapshot = json.loads(raw_json_bytes)
+    snapshot = raw_data.get('mdb_snapshot', raw_data)
 
     # Extract patient + first exam from snapshot
     pat_handle = next(iter(snapshot.get('patients', {}).keys()), f'mrn_{mrn}')
@@ -857,7 +855,7 @@ def upload_trend_scan(mrn: str, raw_json_bytes: bytes, scan_type: str,
         'scan_date':   scan_date_str or None,
         'scan_type':   scan_type,
         'image_paths': {},
-        'raw_json':    snapshot,  # Pass dict, not string, so JSONB stores properly
+        'raw_json':    raw_data,  # Full dict with mdb_snapshot + bone_regions
         'updated_at':  datetime.utcnow().isoformat(),
     }
     if patient_uuid:
