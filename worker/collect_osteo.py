@@ -295,14 +295,17 @@ def get_sessions_for_mrn(mrn: str) -> list[dict]:
     return list_patient_sessions(config.MDB_PATH, mrn)
 
 
-def build_raw_osteo_json(mrn: str, scan_index: int = 0) -> dict:
+def build_raw_osteo_json(mrn: str, scan_index: int = 0, scan_date: str = None) -> dict:
     """
-    Load the patient + most recent OSTEO (spine/hip) session from MDB.
+    Load the patient + OSTEO (spine/hip) session from MDB.
 
     Scoped strictly to osteo sessions (mdb_scan_type='osteo') across ALL
     pat_handles for this MRN.  Combined-scan patients (who also have a
     total-body scan) are handled correctly — total-body sessions are
     excluded so their composition data never bleeds into the osteo raw_json.
+
+    If scan_date is provided (ISO format YYYY-MM-DD or full ISO), selects that specific date.
+    Otherwise uses scan_index (default 0 = most recent).
 
     Raises RuntimeError if the patient or an osteo session is not found.
     """
@@ -332,6 +335,18 @@ def build_raw_osteo_json(mrn: str, scan_index: int = 0) -> dict:
     pat_sessions.sort(
         key=lambda x: x[1].get('scan_date') or datetime.min, reverse=True
     )
+
+    # If scan_date is specified, find the matching session
+    if scan_date:
+        target_date_str = scan_date[:10]  # Extract YYYY-MM-DD
+        for pat, sess in pat_sessions:
+            sess_date_str = str(sess.get('scan_date', ''))[:10]
+            if sess_date_str == target_date_str:
+                return {'patient': pat, 'session': sess}
+        raise RuntimeError(
+            f"No osteo scan found for MRN '{mrn}' on date {target_date_str}.\n"
+            f"Available dates: {', '.join(str(s[1].get('scan_date', ''))[:10] for s in pat_sessions)}"
+        )
 
     if scan_index >= len(pat_sessions):
         raise RuntimeError(
@@ -440,7 +455,8 @@ def extract_images(xps_map: dict[str, str],
 def upload_osteo_scan(mrn: str,
                       xps_map: dict[str, str],
                       progress_cb=None,
-                      scan_index: int = 0) -> dict:
+                      scan_index: int = 0,
+                      scan_date: str = None) -> dict:
     """
     Full osteo upload for one patient:
       1. Read MDB → raw_osteo.json
@@ -450,6 +466,7 @@ def upload_osteo_scan(mrn: str,
       5. Return upload result dict
 
     progress_cb(message: str) is called with status strings.
+    scan_date: ISO date string (YYYY-MM-DD or full ISO) to select specific scan; if None, uses most recent
     Raises on fatal errors (MDB not found, Supabase unreachable, etc.).
     """
     from sync_supabase import upload_osteo_raw
@@ -458,7 +475,7 @@ def upload_osteo_scan(mrn: str,
 
     # 1. MDB data
     notify(f"Reading MDB for MRN {mrn}…")
-    raw_data = build_raw_osteo_json(mrn, scan_index=scan_index)
+    raw_data = build_raw_osteo_json(mrn, scan_index=scan_index, scan_date=scan_date)
     raw_json_bytes = json.dumps(raw_data, indent=2, default=_serial).encode()
 
     # 2. Images

@@ -238,6 +238,7 @@ class TrendBody(BaseModel):
 class UploadBody(BaseModel):
     xps_paths:          list[str] = []
     scan_type_override: Optional[str] = None   # 'osteo' | 'total_body'
+    scan_date:          Optional[str] = None   # ISO date of selected scan (YYYY-MM-DD or full ISO)
 
 
 # ── Archive MDB endpoints ─────────────────────────────────────────────────────
@@ -399,7 +400,7 @@ def upload(patient_id: str, body: UploadBody):
                         break
                     elif label in ('spine', 'left_femur', 'right_femur'):
                         xps_map[label] = p
-                result = upload_osteo_scan(patient_id, xps_map, progress_cb=_cb)
+                result = upload_osteo_scan(patient_id, xps_map, progress_cb=_cb, scan_date=body.scan_date)
 
             q.put({'done': True, 'result': _jsonify(result)})
         except Exception as e:
