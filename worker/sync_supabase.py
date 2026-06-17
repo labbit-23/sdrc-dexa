@@ -745,7 +745,7 @@ def upload_patient_trend(patient_id: str, scan_type: str,
     if not pat_handles:
         raise RuntimeError(f'Patient {patient_id} not found in archive MDB')
 
-    # Get patient data and latest session
+    # Get patient data and sessions
     pat_handle = pat_handles[0]
     patient_row = parser._patients[pat_handle]
     pat = parser._parse_patient(patient_row)
@@ -754,14 +754,15 @@ def upload_patient_trend(patient_id: str, scan_type: str,
     if not sessions:
         raise RuntimeError(f'No sessions found for {patient_id} in archive MDB')
 
-    # Get latest session matching scan type
-    latest_session = sessions[0]
+    # Find session matching requested scan type
     expected_type = 'osteo' if scan_type == 'osteo_trend' else 'total_body'
-    if latest_session.get('mdb_scan_type') != expected_type:
+    matching_sessions = [s for s in sessions if s.get('mdb_scan_type') == expected_type]
+    if not matching_sessions:
+        available = ', '.join(set(s.get('mdb_scan_type', 'unknown') for s in sessions))
         raise RuntimeError(
-            f'Archive patient {patient_id} session type {latest_session.get("mdb_scan_type")} '
-            f'does not match requested {expected_type}'
+            f'Archive patient {patient_id} has no {expected_type} scan. Available: {available}'
         )
+    latest_session = matching_sessions[0]
 
     # Build raw JSON snapshot (same structure as fetch)
     raw_data = {
