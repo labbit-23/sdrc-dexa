@@ -770,6 +770,7 @@ def upload_trend_scan(mrn: str, raw_json_bytes: bytes, scan_type: str,
         'scan_type':   scan_type,
         'image_paths': {},
         'raw_json':    raw_json_bytes.decode(),
+        'updated_at':  datetime.utcnow().isoformat(),  # Track when archive data was last updated
     }
     r = httpx.post(f'{rest}/bmd_scans?on_conflict=scan_handle',
                    headers=db_headers, content=json.dumps(scan_row), timeout=30)
