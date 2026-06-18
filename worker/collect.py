@@ -150,7 +150,7 @@ def find_xps_for_patient(patient_id: str,
 def mdb_snapshot(patient_id: str, mdb_path: str = '') -> dict:
     """
     Extract a JSON-serialisable snapshot of MDB data for one patient.
-    Includes all patient rows, all exams, all composition and densitometry rows.
+    Includes all patient rows, all exams, all composition, densitometry, and norm rows.
     Pass mdb_path to read from an alternative MDB (e.g. archive).
     """
     parser = MdbParser(mdb_path or config.MDB_PATH)
@@ -198,6 +198,19 @@ def mdb_snapshot(patient_id: str, mdb_path: str = '') -> dict:
         if h in img_handles
     }
 
+    # Collect all dens_handles from densitometry for norm lookup
+    dens_handles = set()
+    for rows in dens_out.values():
+        for row in rows:
+            if 'dens_handle' in row:
+                dens_handles.add(row['dens_handle'])
+
+    norm_out = {}
+    for rh in dens_handles:
+        norm_row = parser._norm.get(rh)
+        if norm_row:
+            norm_out[rh] = {k: _ser(v) for k, v in norm_row.items()}
+
     return {
         'patient_id':    patient_id,
         'snapshot_ts':   datetime.utcnow().isoformat(),
@@ -205,6 +218,7 @@ def mdb_snapshot(patient_id: str, mdb_path: str = '') -> dict:
         'exams':         exams_out,
         'composition':   comp_out,
         'densitometry':  dens_out,
+        'norm':          norm_out,
     }
 
 
