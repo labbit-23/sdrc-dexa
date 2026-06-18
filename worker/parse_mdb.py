@@ -238,10 +238,11 @@ class MdbParser:
             norm_type = int(float(r.get('type', -1)))
             if norm_type != 0:
                 continue
-            # Keep only if percent_ya is non-zero (sub-regions without reference have 0)
+            # Keep only if percent_ya or T-score or Z-score is non-null
             pct_ya = _safe_float(r.get('percent_ya'))
             t = _safe_float(r.get('zsco_bmd_ya'))
-            if pct_ya is None and t is None:
+            z = _safe_float_score(r.get('zsco_bmd_am'))
+            if pct_ya is None and t is None and z is None:
                 continue
             index[rh] = r
         return index

@@ -386,3 +386,76 @@ def upload_totalbody_scan(
         f"  DB: {'patient=' + puuid[:8] + '… scan=' + suuid[:8] + '…' if db_ok else 'WARNING — DB rows not confirmed'}"
     )
     return result
+
+
+def upload_totalbody_trend_scan(
+    mrn: str,
+    archive_mdb_path: str,
+    progress_cb=None,
+) -> dict:
+    """
+    Upload total-body trend (archive MDB only, no XPS/images):
+      1. Read MDB snapshot + bone regions from archive
+      2. Build raw_json (same format as regular scans)
+      3. Call upload_totalbody_raw with empty xps_files and png_images
+      4. Upsert patient + scan rows with scan_type='total_body_trend'
+    """
+    from sync_supabase import upload_totalbody_raw
+    from collect import mdb_snapshot
+
+    notify = progress_cb or (lambda m: log.info(m))
+
+    # 1. Read archive MDB
+    notify(f"Reading archive MDB for MRN {mrn}…")
+    mdb_snap = mdb_snapshot(mrn, mdb_path=archive_mdb_path)
+
+    # Extract bone regions from archive
+    parser = MdbParser(archive_mdb_path)
+    pat_handles = [
+        ph for ph, row in parser._patients.items()
+        if row.get('patient_id', '').strip() == str(mrn)
+    ]
+    if not pat_handles:
+        raise RuntimeError(f'Patient {mrn} not found in archive MDB')
+
+    mdb_bone_regions = {}
+    img_handle = parser.find_totalbody_img_handle(pat_handles[0])
+    if img_handle:
+        mdb_bone_regions = parser.get_totalbody_bone_regions(img_handle)
+        notify(f"Archive bone regions: {len(mdb_bone_regions)} regions")
+
+    # 2. Build raw_json (same structure as regular scans, but without XPS)
+    raw_data = {
+        'mdb_snapshot':     mdb_snap,
+        'mdb_bone_regions': mdb_bone_regions,
+        'xps_bone':         None,
+        'xps_composition':  None,
+    }
+    raw_json_bytes = json.dumps(raw_data, indent=2, default=_serial).encode()
+
+    # 3. Extract session info (skip patient_data — trend patients already exist)
+    _, session_data = _patient_from_snapshot(
+        mrn, mdb_snap, xps_bone=None, xps_comp=None
+    )
+
+    # 4. Upload to Supabase (empty XPS files and images, no patient upsert)
+    notify("Uploading trend to Supabase…")
+    result = upload_totalbody_raw(
+        mrn          = mrn,
+        raw_json     = raw_json_bytes,
+        xps_files    = {},  # No XPS files for trends
+        png_images   = {},  # No images for trends
+        patient_data = None,  # Skip patient upsert — already exists
+        session_data = session_data,
+        notify       = notify,
+        scan_type    = 'total_body_trend',  # Suffix for trends
+    )
+
+    puuid = result.get('patient_uuid')
+    suuid = result.get('scan_uuid')
+    db_ok = bool(puuid and suuid)
+    notify(
+        f"✓ Trend uploaded.\n"
+        f"  DB: {'patient=' + puuid[:8] + '… scan=' + suuid[:8] + '…' if db_ok else 'WARNING — DB rows not confirmed'}"
+    )
+    return result

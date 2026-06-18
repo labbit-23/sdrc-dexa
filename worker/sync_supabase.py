@@ -390,6 +390,7 @@ def upload_osteo_raw(
     png_images:   dict[str, bytes] | None = None,
     patient_data: dict | None = None,
     session_data: dict | None = None,
+    scan_type:    str = '',
 ) -> dict:
     """
     Upload raw osteo data for one patient:
@@ -509,7 +510,7 @@ def upload_osteo_raw(
             'scanner_serial': session_data.get('scanner_serial') or config.SCANNER_ID,
             'software':       session_data.get('software') or config.SOFTWARE,
             'xps_filename':   session_data.get('ntx_filename') or None,
-            'scan_type':      _osteo_scan_type(session_data),
+            'scan_type':      scan_type or _osteo_scan_type(session_data),
             'image_paths':    image_paths,
             'raw_json':       raw_json_str,
         }
@@ -566,6 +567,7 @@ def upload_totalbody_raw(
     patient_data: dict | None = None,
     session_data: dict | None = None,
     notify=None,
+    scan_type:    str = 'total_body',
 ) -> dict:
     """
     Upload raw total-body data for one patient (mirrors upload_osteo_raw):
@@ -593,33 +595,38 @@ def upload_totalbody_raw(
         r.raise_for_status()
         log.info("Uploaded → %s", path)
 
-    # Storage uploads
-    _n(f"  Uploading raw_totalbody.json ({len(raw_json)//1024} KB)…")
-    _put(f"{prefix}/raw_totalbody.json", raw_json, "application/json")
-
-    _img_key = {
-        'img_fat_lean.png':     'fat_lean',
-        'img_fat_gradient.png': 'fat_gradient',
-        'img_bone.png':         'bone',
-        'img_composite.png':    'composite',
-    }
+    # Storage uploads (skip for trends — no XPS/image files)
     image_paths: dict[str, str] = {}
-    for fname, data in (png_images or {}).items():
-        _n(f"  Uploading {fname} ({len(data)//1024} KB)…")
-        storage_path = f"{prefix}/{fname}"
-        _put(storage_path, data, "image/png")
-        key = _img_key.get(fname, fname.replace('img_', '').replace('.png', ''))
-        image_paths[key] = storage_path
+    n_files = 0
+    log.info(f"DEBUG: xps_files={len(xps_files)} items, png_images={len(png_images or {})}, skip_storage={not (xps_files or png_images)}")
+    if xps_files or png_images:
+        _n(f"  Uploading raw_totalbody.json ({len(raw_json)//1024} KB)…")
+        _put(f"{prefix}/raw_totalbody.json", raw_json, "application/json")
 
-    for fname, data in xps_files.items():
-        _n(f"  Uploading {fname} ({len(data)//1024} KB)…")
-        _put(f"{prefix}/{fname}", data, "application/octet-stream")
+        _img_key = {
+            'img_fat_lean.png':     'fat_lean',
+            'img_fat_gradient.png': 'fat_gradient',
+            'img_bone.png':         'bone',
+            'img_composite.png':    'composite',
+        }
+        for fname, data in (png_images or {}).items():
+            _n(f"  Uploading {fname} ({len(data)//1024} KB)…")
+            storage_path = f"{prefix}/{fname}"
+            _put(storage_path, data, "image/png")
+            key = _img_key.get(fname, fname.replace('img_', '').replace('.png', ''))
+            image_paths[key] = storage_path
 
-    n_files = 1 + len(xps_files) + len(image_paths)
+        for fname, data in xps_files.items():
+            _n(f"  Uploading {fname} ({len(data)//1024} KB)…")
+            _put(f"{prefix}/{fname}", data, "application/octet-stream")
+
+        n_files = 1 + len(xps_files) + len(image_paths)
     log.info("Total-body raw upload complete: %s (%d files)", prefix, n_files)
 
     # DB upserts — use httpx directly (same as storage) to avoid supabase-py hangs
     patient_uuid = scan_uuid = None
+
+    # Upsert patient if provided (skip for trends — patient already exists)
     if patient_data and session_data:
         db_headers = {
             'Authorization': f"Bearer {config.SUPABASE_KEY}",
@@ -651,29 +658,58 @@ def upload_totalbody_raw(
         log.info("Upserted bmd_patients: %s", patient_uuid)
         _n("  Patient record saved. Upserting scan record…")
 
-        raw_json_str = raw_json.decode()
-        scan_date_raw = session_data.get('scan_date', '')
-        if hasattr(scan_date_raw, 'strftime'):
-            scan_date_str = scan_date_raw.strftime('%Y-%m-%dT%H:%M:%S')
-        else:
-            scan_date_str = str(scan_date_raw)
+    # Upsert scan (for trends, find existing patient by MRN)
+    if session_data:
+        if not patient_uuid:
+            # For trends: patient_data is None, look up patient by MRN
+            db_headers = {
+                'Authorization': f"Bearer {config.SUPABASE_KEY}",
+                'apikey':        config.SUPABASE_KEY,
+                'Content-Type':  'application/json',
+                'Prefer':        'resolution=merge-duplicates,return=representation',
+            }
+            rest = f"{config.SUPABASE_URL}/rest/v1"
+            r = httpx.get(f"{rest}/bmd_patients?mrn=eq.{mrn}&select=id", headers=db_headers, timeout=10)
+            if r.status_code == 200:
+                patients = r.json()
+                patient_uuid = patients[0]['id'] if patients else None
 
-        scan_handle = f"{patient_data.get('pat_handle', mrn)}_tb_{scan_date_str[:10]}"
-        scan_row = {
-            'patient_id':     patient_uuid,
-            'scan_handle':    scan_handle,
-            'scan_date':      scan_date_str or None,
-            'scanner_serial': session_data.get('scanner_serial') or config.SCANNER_ID,
-            'software':       session_data.get('software') or config.SOFTWARE,
-            'scan_type':      'total_body',
-            'image_paths':    image_paths,
-            'raw_json':       raw_json_str,
-        }
-        r = httpx.post(f"{rest}/bmd_scans?on_conflict=scan_handle", headers=db_headers,
-                       content=json.dumps(scan_row), timeout=30)
-        r.raise_for_status()
-        scan_uuid = r.json()[0]['id']
-        log.info("Upserted bmd_scans (total_body): %s", scan_uuid)
+        if patient_uuid or not patient_data:  # Create scan row if we have patient_uuid, or for trendless scans
+            db_headers = {
+                'Authorization': f"Bearer {config.SUPABASE_KEY}",
+                'apikey':        config.SUPABASE_KEY,
+                'Content-Type':  'application/json',
+                'Prefer':        'resolution=merge-duplicates,return=representation',
+            }
+            rest = f"{config.SUPABASE_URL}/rest/v1"
+
+            raw_json_str = raw_json.decode()
+            scan_date_raw = session_data.get('scan_date', '')
+            if hasattr(scan_date_raw, 'strftime'):
+                scan_date_str = scan_date_raw.strftime('%Y-%m-%dT%H:%M:%S')
+            else:
+                scan_date_str = str(scan_date_raw)
+
+            # For trends, use MRN in handle; for regular scans use pat_handle
+            pat_handle = patient_data.get('pat_handle', mrn) if patient_data else mrn
+            scan_handle = f"{pat_handle}_tb_{scan_date_str[:10]}"
+            scan_row = {
+                'scan_handle':    scan_handle,
+                'scan_date':      scan_date_str or None,
+                'scanner_serial': session_data.get('scanner_serial') or config.SCANNER_ID,
+                'software':       session_data.get('software') or config.SOFTWARE,
+                'scan_type':      scan_type,
+                'image_paths':    image_paths,
+                'raw_json':       raw_json_str,
+            }
+            if patient_uuid:
+                scan_row['patient_id'] = patient_uuid
+
+            r = httpx.post(f"{rest}/bmd_scans?on_conflict=scan_handle", headers=db_headers,
+                           content=json.dumps(scan_row), timeout=30)
+            r.raise_for_status()
+            scan_uuid = r.json()[0]['id']
+            log.info("Upserted bmd_scans (%s): %s", scan_type, scan_uuid)
 
     return {
         'storage_prefix': prefix,
@@ -730,9 +766,9 @@ def upload_patient_trend(patient_id: str, scan_type: str,
 
     notify(f'Reading MDB for {patient_id}…')
     # Use the same mdb_snapshot() function that works for regular scans
-    raw_data = mdb_snapshot(patient_id, mdb_path=mdb_path)
+    mdb_snap = mdb_snapshot(patient_id, mdb_path=mdb_path)
 
-    # Validate that patient has the requested scan type
+    # Extract mdb_bone_regions from archive MDB (same as regular scans)
     parser = MdbParser(mdb_path)
     pat_handles = [
         ph for ph, row in parser._patients.items()
@@ -741,6 +777,7 @@ def upload_patient_trend(patient_id: str, scan_type: str,
     if not pat_handles:
         raise RuntimeError(f'Patient {patient_id} not found in MDB')
 
+    # Validate that patient has the requested scan type
     sessions = parser.get_scan_sessions(pat_handles[0])
     expected_type = 'osteo' if scan_type == 'osteo_trend' else 'total_body'
     matching_sessions = [s for s in sessions if s.get('mdb_scan_type') == expected_type]
@@ -750,11 +787,17 @@ def upload_patient_trend(patient_id: str, scan_type: str,
             f'Patient {patient_id} has no {expected_type} scan. Available: {available}'
         )
 
+    mdb_bone_regions = {}
+    if expected_type == 'total_body':
+        img_handle = parser.find_totalbody_img_handle(pat_handles[0])
+        if img_handle:
+            mdb_bone_regions = parser.get_totalbody_bone_regions(img_handle)
+
     notify('Uploading trend data to Supabase…')
-    return upload_trend_scan(str(patient_id), raw_data, scan_type, progress_cb=progress_cb)
+    return upload_trend_scan(str(patient_id), mdb_snap, mdb_bone_regions, scan_type, progress_cb=progress_cb)
 
 
-def upload_trend_scan(mrn: str, raw_data: dict, scan_type: str,
+def upload_trend_scan(mrn: str, mdb_snap: dict, mdb_bone_regions: dict, scan_type: str,
                       progress_cb=None) -> dict:
     """
     Upload MDB-only historical data as a trend record — no Storage, no XPS.
@@ -765,11 +808,9 @@ def upload_trend_scan(mrn: str, raw_data: dict, scan_type: str,
     """
     notify = progress_cb or log.info
 
-    snapshot = raw_data.get('mdb_snapshot', raw_data)
-
     # Extract patient + first exam from snapshot
-    pat_handle = next(iter(snapshot.get('patients', {}).keys()), f'mrn_{mrn}')
-    first_exam   = (snapshot.get('exams') or [{}])[0]
+    pat_handle = next(iter(mdb_snap.get('patients', {}).keys()), f'mrn_{mrn}')
+    first_exam   = (mdb_snap.get('exams') or [{}])[0]
 
     scan_date_raw = first_exam.get('_acq_dt', '')
     scan_date_str = str(scan_date_raw)[:19]          # 'YYYY-MM-DDTHH:MM:SS'
@@ -800,12 +841,19 @@ def upload_trend_scan(mrn: str, raw_data: dict, scan_type: str,
     # ── bmd_scans ─────────────────────────────────────────────────────────────
     # Suffix '_t' distinguishes trend handle from a real scan on the same date
     scan_handle = f'{pat_handle}_{scan_date_str[:10]}_t'
+    # Store in EXACT same format as regular scans (just without XPS data)
+    raw_json_full = {
+        'mdb_snapshot':     mdb_snap,
+        'mdb_bone_regions': mdb_bone_regions,
+        'xps_bone':         None,
+        'xps_composition':  None,
+    }
     scan_row = {
         'scan_handle': scan_handle,
         'scan_date':   scan_date_str or None,
         'scan_type':   scan_type,
         'image_paths': {},
-        'raw_json':    raw_data,  # Full dict with mdb_snapshot + bone_regions
+        'raw_json':    raw_json_full,
         'updated_at':  datetime.utcnow().isoformat(),
     }
     if patient_uuid:

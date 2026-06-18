@@ -374,6 +374,7 @@ def archive_all(q: Optional[str] = None, max_count: int = 500):
 def archive_trend(patient_id: str, body: TrendBody, mdb: Optional[str] = None):
     """Upload a trend record from an archive MDB (no XPS). Pass ?mdb=label to target a specific archive."""
     from pathlib import Path as _Path
+
     archives = _archive_paths()
     if not archives:
         raise HTTPException(status_code=503, detail='ARCHIVE_MDB_PATH not configured')
@@ -383,15 +384,27 @@ def archive_trend(patient_id: str, body: TrendBody, mdb: Optional[str] = None):
             raise HTTPException(status_code=404, detail=f'Archive "{mdb}" not found')
     else:
         candidates = [a for a in archives if _Path(a['path']).exists()]
+
     last_error: Exception | None = None
     for a in candidates:
         msgs: list[str] = []
         try:
-            result = upload_patient_trend(
-                patient_id, body.scan_type,
-                progress_cb=lambda m: msgs.append(m),
-                mdb_path=a['path'],
-            )
+            # Use the same upload functions as regular scans, just for trends
+            if body.scan_type == 'total_body_trend':
+                from collect_totalbody import upload_totalbody_trend_scan
+                result = upload_totalbody_trend_scan(
+                    patient_id, a['path'],
+                    progress_cb=lambda m: msgs.append(m),
+                )
+            elif body.scan_type == 'osteo_trend':
+                from collect_osteo import upload_osteo_trend_scan
+                result = upload_osteo_trend_scan(
+                    patient_id, a['path'],
+                    progress_cb=lambda m: msgs.append(m),
+                )
+            else:
+                raise ValueError(f'Invalid trend scan_type: {body.scan_type}')
+
             return {'ok': True, 'messages': msgs, 'result': _jsonify(result), 'archive': a['label']}
         except Exception as e:
             log.warning('archive trend: %s not found in %s: %s', patient_id, a['label'], e)

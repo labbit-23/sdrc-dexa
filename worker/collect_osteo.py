@@ -537,6 +537,91 @@ def upload_osteo_scan(mrn: str,
     return result
 
 
+def upload_osteo_trend_scan(mrn: str,
+                            archive_mdb_path: str,
+                            progress_cb=None,
+                            scan_index: int = 0) -> dict:
+    """
+    Upload osteo trend (archive MDB only, no XPS/images):
+      1. Read MDB snapshot from archive
+      2. Build raw_json (same format as regular scans)
+      3. Call upload_osteo_raw with empty xps_files and png_images
+      4. Upsert patient + scan rows with scan_type='osteo_trend'
+    """
+    from sync_supabase import upload_osteo_raw
+    from collect import mdb_snapshot
+
+    notify = progress_cb or (lambda m: log.info(m))
+
+    # 1. Read archive MDB
+    notify(f"Reading archive MDB for MRN {mrn}…")
+    mdb_snap = mdb_snapshot(mrn, mdb_path=archive_mdb_path)
+
+    # Validate patient has osteo scan in archive
+    parser = MdbParser(archive_mdb_path)
+    pat_handles = [
+        ph for ph, row in parser._patients.items()
+        if row.get('patient_id', '').strip() == str(mrn)
+    ]
+    if not pat_handles:
+        raise RuntimeError(f'Patient {mrn} not found in archive MDB')
+
+    sessions = parser.get_scan_sessions(pat_handles[0])
+    osteo_sessions = [s for s in sessions if s.get('mdb_scan_type') == 'osteo']
+    if not osteo_sessions:
+        raise RuntimeError(f'Patient {mrn} has no osteo scan in archive')
+
+    # 2. Build raw_json (same structure as regular scans)
+    raw_data = {
+        'mdb_snapshot': mdb_snap,
+        'xps_bone':     None,
+    }
+    raw_json_bytes = json.dumps(raw_data, indent=2, default=_serial).encode()
+
+    # 3. Extract patient/session info from snapshot
+    first_exam = (mdb_snap.get('exams') or [{}])[0]
+    patient_row = list(mdb_snap.get('patients', {}).values())[0] if mdb_snap.get('patients') else {}
+
+    patient_data = {
+        'patient_id': mrn,
+        'name':       patient_row.get('name', ''),
+        'title':      patient_row.get('title', ''),
+        'gender':     patient_row.get('gender', 'M'),
+        'dob':        patient_row.get('dob'),
+        'height_cm':  patient_row.get('height_cm'),
+        'weight_kg':  patient_row.get('weight_kg'),
+        'ethnicity':  patient_row.get('ethnicity', ''),
+        'physician':  patient_row.get('physician', ''),
+    }
+
+    session_data = {
+        'scan_type': 'osteo_trend',
+        'scan_date': first_exam.get('_acq_dt'),
+        'scanner_serial': first_exam.get('scanner_id'),
+    }
+
+    # 4. Upload to Supabase (empty XPS files and images)
+    notify("Uploading trend to Supabase…")
+    result = upload_osteo_raw(
+        mrn          = mrn,
+        raw_json     = raw_json_bytes,
+        xps_files    = {},  # No XPS files for trends
+        png_images   = {},  # No images for trends
+        patient_data = patient_data,
+        session_data = session_data,
+        scan_type    = 'osteo_trend',  # Suffix for trends
+    )
+
+    puuid = result.get('patient_uuid')
+    suuid = result.get('scan_uuid')
+    db_ok = bool(puuid and suuid)
+    notify(
+        f"✓ Trend uploaded.\n"
+        f"  DB: {'patient=' + puuid[:8] + '… scan=' + suuid[:8] + '…' if db_ok else 'WARNING — DB rows not confirmed'}"
+    )
+    return result
+
+
 # ─── Recent patient helper (for UI auto-load) ─────────────────────────────────
 
 def get_patient_by_mrn(mrn: str) -> Optional[dict]:
