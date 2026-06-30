@@ -543,22 +543,19 @@ def upload_osteo_trend_scan(mrn: str,
                             scan_index: int = 0) -> dict:
     """
     Upload osteo trend (archive MDB only, no XPS/images):
-      1. Read MDB snapshot from archive
-      2. Build raw_json (same format as regular scans)
+      1. Read and parse archive MDB to get patient + session data
+      2. Build raw_json using proper structure
       3. Call upload_osteo_raw with empty xps_files and png_images
-      4. Upsert patient + scan rows with scan_type='osteo_trend'
+      4. Upsert scan rows with scan_type='osteo_trend'
     """
     from sync_supabase import upload_osteo_raw
-    from collect import mdb_snapshot
+    from parse_mdb import MdbParser as ArchiveMdbParser
 
     notify = progress_cb or (lambda m: log.info(m))
 
-    # 1. Read archive MDB
+    # 1. Validate patient exists in archive and has osteo scan
     notify(f"Reading archive MDB for MRN {mrn}…")
-    mdb_snap = mdb_snapshot(mrn, mdb_path=archive_mdb_path)
-
-    # Validate patient has osteo scan in archive
-    parser = MdbParser(archive_mdb_path)
+    parser = ArchiveMdbParser(archive_mdb_path)
     pat_handles = [
         ph for ph, row in parser._patients.items()
         if row.get('patient_id', '').strip() == str(mrn)
@@ -571,33 +568,45 @@ def upload_osteo_trend_scan(mrn: str,
     if not osteo_sessions:
         raise RuntimeError(f'Patient {mrn} has no osteo scan in archive')
 
-    # 2. Build raw_json (same structure as regular scans)
+    # 2. Build raw_json using the same structure as regular scans
+    # Use the first osteo session for the trend
+    pat = parser._parse_patient(parser._patients[pat_handles[0]])
+    sess = osteo_sessions[0]
+
     raw_data = {
-        'mdb_snapshot': mdb_snap,
-        'xps_bone':     None,
+        'patient': {
+            'pat_handle':  pat['pat_handle'],
+            'patient_id':  pat['patient_id'],
+            'mrn':         mrn,
+            'name':        pat.get('name', ''),
+            'title':       pat.get('title', ''),
+            'dob':         pat['dob'].isoformat() if pat.get('dob') else '',
+            'gender':      pat.get('gender', 'Female'),
+            'ethnicity':   pat.get('ethnicity', ''),
+            'height_cm':   pat.get('height_cm') or 0,
+            'weight_kg':   pat.get('weight_kg') or 0,
+            'bmi':         pat.get('bmi') or 0,
+            'physician':   pat.get('physician', ''),
+        },
+        'session': {
+            'scan_date':      sess.get('scan_date', ''),
+            'scanner_serial': sess.get('scanner_serial') or config.SCANNER_ID,
+            'software':       sess.get('software') or config.SOFTWARE,
+            'ntx_filename':   sess.get('ntx_filename'),
+            'spine':                 sess.get('spine', {}),
+            'left_femur':            sess.get('left_femur', {}),
+            'right_femur':           sess.get('right_femur', {}),
+            'estimated_composition': sess.get('estimated_composition', {}),
+        }
     }
     raw_json_bytes = json.dumps(raw_data, indent=2, default=_serial).encode()
 
-    # 3. Extract patient/session info from snapshot
-    first_exam = (mdb_snap.get('exams') or [{}])[0]
-    patient_row = list(mdb_snap.get('patients', {}).values())[0] if mdb_snap.get('patients') else {}
-
-    patient_data = {
-        'patient_id': mrn,
-        'name':       patient_row.get('name', ''),
-        'title':      patient_row.get('title', ''),
-        'gender':     patient_row.get('gender', 'M'),
-        'dob':        patient_row.get('dob'),
-        'height_cm':  patient_row.get('height_cm'),
-        'weight_kg':  patient_row.get('weight_kg'),
-        'ethnicity':  patient_row.get('ethnicity', ''),
-        'physician':  patient_row.get('physician', ''),
-    }
-
+    # 3. Extract patient/session data for upload
+    patient_data = None  # Skip patient upsert — already exists in DB
     session_data = {
         'scan_type': 'osteo_trend',
-        'scan_date': first_exam.get('_acq_dt'),
-        'scanner_serial': first_exam.get('scanner_id'),
+        'scan_date': sess.get('scan_date'),
+        'scanner_serial': sess.get('scanner_serial') or config.SCANNER_ID,
     }
 
     # 4. Upload to Supabase (empty XPS files and images)
