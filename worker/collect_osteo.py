@@ -592,8 +592,8 @@ def upload_osteo_trend_scan(mrn: str,
 
     session_data = {
         'scan_type': 'osteo_trend',
-        'scan_date': first_exam.get('_acq_dt'),
-        'scanner_serial': first_exam.get('scanner_id'),
+        'scan_date': raw_data['session'].get('scan_date'),
+        'scanner_serial': raw_data['session'].get('scanner_serial'),
     }
 
     # 4. Upload to Supabase (empty XPS files and images)
