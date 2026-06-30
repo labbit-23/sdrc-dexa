@@ -295,7 +295,7 @@ def get_sessions_for_mrn(mrn: str) -> list[dict]:
     return list_patient_sessions(config.MDB_PATH, mrn)
 
 
-def build_raw_osteo_json(mrn: str, scan_index: int = 0, scan_date: str = None) -> dict:
+def build_raw_osteo_json(mrn: str, scan_index: int = 0, scan_date: str = None, mdb_path: str = '') -> dict:
     """
     Load the patient + OSTEO (spine/hip) session from MDB.
 
@@ -307,11 +307,13 @@ def build_raw_osteo_json(mrn: str, scan_index: int = 0, scan_date: str = None) -
     If scan_date is provided (ISO format YYYY-MM-DD or full ISO), selects that specific date.
     Otherwise uses scan_index (default 0 = most recent).
 
+    Pass mdb_path to read from an alternative MDB (e.g. archive).
+
     Raises RuntimeError if the patient or an osteo session is not found.
     """
     from parse_mdb import MdbParser
 
-    parser = MdbParser(config.MDB_PATH)
+    parser = MdbParser(mdb_path or config.MDB_PATH)
 
     # Collect osteo sessions across ALL pat_handles for this MRN.
     # Combined-scan patients can have separate pat_handles per scan type,
@@ -571,27 +573,21 @@ def upload_osteo_trend_scan(mrn: str,
     if not osteo_sessions:
         raise RuntimeError(f'Patient {mrn} has no osteo scan in archive')
 
-    # 2. Build raw_json (same structure as regular scans)
-    raw_data = {
-        'mdb_snapshot': mdb_snap,
-        'xps_bone':     None,
-    }
+    # 2. Build raw_json using standardized format (same as regular scans)
+    raw_data = build_raw_osteo_json(mrn, scan_index=scan_index, mdb_path=archive_mdb_path)
     raw_json_bytes = json.dumps(raw_data, indent=2, default=_serial).encode()
 
-    # 3. Extract patient/session info from snapshot
-    first_exam = (mdb_snap.get('exams') or [{}])[0]
-    patient_row = list(mdb_snap.get('patients', {}).values())[0] if mdb_snap.get('patients') else {}
-
+    # 3. Extract patient/session info from standardized raw_data
     patient_data = {
         'patient_id': mrn,
-        'name':       patient_row.get('name', ''),
-        'title':      patient_row.get('title', ''),
-        'gender':     patient_row.get('gender', 'M'),
-        'dob':        patient_row.get('dob'),
-        'height_cm':  patient_row.get('height_cm'),
-        'weight_kg':  patient_row.get('weight_kg'),
-        'ethnicity':  patient_row.get('ethnicity', ''),
-        'physician':  patient_row.get('physician', ''),
+        'name':       raw_data['patient'].get('name', ''),
+        'title':      raw_data['patient'].get('title', ''),
+        'gender':     raw_data['patient'].get('gender', 'M'),
+        'dob':        raw_data['patient'].get('dob'),
+        'height_cm':  raw_data['patient'].get('height_cm'),
+        'weight_kg':  raw_data['patient'].get('weight_kg'),
+        'ethnicity':  raw_data['patient'].get('ethnicity', ''),
+        'physician':  raw_data['patient'].get('physician', ''),
     }
 
     session_data = {
