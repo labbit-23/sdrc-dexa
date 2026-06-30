@@ -607,7 +607,7 @@ def upload_osteo_trend_scan(mrn: str,
         raw_json     = raw_json_bytes,
         xps_files    = {},  # No XPS files for trends
         png_images   = {},  # No images for trends
-        patient_data = patient_data,
+        patient_data = None,  # Archive patient already exists in DB; skip upsert
         session_data = session_data,
         scan_type    = 'osteo_trend',  # Suffix for trends
     )

@@ -464,7 +464,7 @@ def upload_osteo_raw(
 
     # ── DB upserts via httpx REST (avoids supabase-py connection hangs) ─────
     patient_uuid = scan_uuid = None
-    if patient_data and session_data:
+    if session_data:
         db_headers = {
             'Authorization': f"Bearer {config.SUPABASE_KEY}",
             'apikey':        config.SUPABASE_KEY,
@@ -473,27 +473,38 @@ def upload_osteo_raw(
         }
         rest = f"{config.SUPABASE_URL}/rest/v1"
 
-        # ── bmd_patients ──────────────────────────────────────────────────────
-        dob = patient_data.get('dob')
-        pat_row = {
-            'pat_handle':  patient_data.get('pat_handle', f"mrn_{mrn}"),
-            'patient_id':  patient_data.get('patient_id', mrn),
-            'mrn':         mrn,
-            'first_name':  patient_data.get('name', ''),
-            'last_name':   patient_data.get('title', ''),
-            'dob':         (dob or None) if isinstance(dob, str) else (dob.isoformat() if dob else None),
-            'gender':      patient_data.get('gender', ''),
-            'ethnicity':   patient_data.get('ethnicity', ''),
-            'height_cm':   patient_data.get('height_cm') or None,
-            'weight_kg':   patient_data.get('weight_kg') or None,
-            'physician':   patient_data.get('physician', ''),
-            'updated_at':  datetime.utcnow().isoformat(),
-        }
-        r = httpx.post(f"{rest}/bmd_patients?on_conflict=pat_handle", headers=db_headers,
-                       content=json.dumps(pat_row), timeout=30)
-        r.raise_for_status()
-        patient_uuid = r.json()[0]['id']
-        log.info("Upserted bmd_patients: %s", patient_uuid)
+        # ── bmd_patients (only if patient_data provided; archive trends skip this) ─
+        if patient_data:
+            dob = patient_data.get('dob')
+            pat_row = {
+                'pat_handle':  patient_data.get('pat_handle', f"mrn_{mrn}"),
+                'patient_id':  patient_data.get('patient_id', mrn),
+                'mrn':         mrn,
+                'first_name':  patient_data.get('name', ''),
+                'last_name':   patient_data.get('title', ''),
+                'dob':         (dob or None) if isinstance(dob, str) else (dob.isoformat() if dob else None),
+                'gender':      patient_data.get('gender', ''),
+                'ethnicity':   patient_data.get('ethnicity', ''),
+                'height_cm':   patient_data.get('height_cm') or None,
+                'weight_kg':   patient_data.get('weight_kg') or None,
+                'physician':   patient_data.get('physician', ''),
+                'updated_at':  datetime.utcnow().isoformat(),
+            }
+            r = httpx.post(f"{rest}/bmd_patients?on_conflict=pat_handle", headers=db_headers,
+                           content=json.dumps(pat_row), timeout=30)
+            r.raise_for_status()
+            patient_uuid = r.json()[0]['id']
+            log.info("Upserted bmd_patients: %s", patient_uuid)
+        else:
+            # For archive trends: look up existing patient by MRN
+            r = httpx.get(f"{rest}/bmd_patients?mrn=eq.{mrn}&select=id", headers=db_headers, timeout=30)
+            r.raise_for_status()
+            patients = r.json()
+            if patients:
+                patient_uuid = patients[0]['id']
+                log.info("Found existing patient by MRN %s: %s", mrn, patient_uuid)
+            else:
+                raise RuntimeError(f"Patient with MRN {mrn} not found in database")
 
         # ── bmd_scans ────────────────────────────────────────────────────────
         raw_json_str = raw_json.decode()
@@ -502,7 +513,7 @@ def upload_osteo_raw(
             scan_date_str = scan_date_raw.strftime('%Y-%m-%dT%H:%M:%S')
         else:
             scan_date_str = str(scan_date_raw)
-        scan_handle = f"{patient_data.get('pat_handle', mrn)}_{scan_date_str[:10]}"
+        scan_handle = f"{mrn}_{scan_date_str[:10]}"  # Use MRN as fallback when no patient_data
         scan_row = {
             'patient_id':     patient_uuid,
             'scan_handle':    scan_handle,
