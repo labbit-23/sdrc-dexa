@@ -376,13 +376,25 @@ def build_raw_osteo_json(mrn: str, scan_index: int = 0, scan_date: str = None, m
             f"Available dates: {', '.join(str(s[1].get('scan_date', ''))[:10] for s in pat_sessions)}"
         )
 
-    if scan_index >= len(pat_sessions):
-        raise RuntimeError(
-            f"scan_index {scan_index} out of range — "
-            f"patient has {len(pat_sessions)} osteo session(s)."
-        )
+    if not pat_sessions:
+        raise RuntimeError(f"Patient MRN '{mrn}' has no osteo sessions in MDB.")
 
-    pat, sess = pat_sessions[scan_index]
+    # Use most recent for metadata (date, scanner, software)
+    most_recent = pat_sessions[0]
+    pat, primary_sess = most_recent
+
+    # Merge spine/femur data from ALL sessions (get whatever is available)
+    merged_spine = {}
+    merged_left_femur = {}
+    merged_right_femur = {}
+    merged_composition = {}
+
+    for _, sess in pat_sessions:
+        merged_spine.update(sess.get('spine', {}))
+        merged_left_femur.update(sess.get('left_femur', {}))
+        merged_right_femur.update(sess.get('right_femur', {}))
+        if sess.get('estimated_composition'):
+            merged_composition.update(sess.get('estimated_composition', {}))
 
     return {
         'patient': {
@@ -400,14 +412,14 @@ def build_raw_osteo_json(mrn: str, scan_index: int = 0, scan_date: str = None, m
             'physician':   pat.get('physician', ''),
         },
         'session': {
-            'scan_date':      sess.get('scan_date', ''),
-            'scanner_serial': sess.get('scanner_serial') or config.SCANNER_ID,
-            'software':       sess.get('software') or config.SOFTWARE,
-            'ntx_filename':   sess.get('ntx_filename'),
-            'spine':                 sess.get('spine', {}),
-            'left_femur':            sess.get('left_femur', {}),
-            'right_femur':           sess.get('right_femur', {}),
-            'estimated_composition': sess.get('estimated_composition', {}),
+            'scan_date':      primary_sess.get('scan_date', ''),
+            'scanner_serial': primary_sess.get('scanner_serial') or config.SCANNER_ID,
+            'software':       primary_sess.get('software') or config.SOFTWARE,
+            'ntx_filename':   primary_sess.get('ntx_filename'),
+            'spine':                 merged_spine,
+            'left_femur':            merged_left_femur,
+            'right_femur':           merged_right_femur,
+            'estimated_composition': merged_composition,
         },
     }
 
