@@ -379,20 +379,37 @@ def build_raw_osteo_json(mrn: str, scan_index: int = 0, scan_date: str = None, m
     if not pat_sessions:
         raise RuntimeError(f"Patient MRN '{mrn}' has no osteo sessions in MDB.")
 
-    # Find most recent session with complete data (spine + both femurs)
-    complete_session = None
-    for p, s in pat_sessions:
-        if s.get('spine') and s.get('left_femur') and s.get('right_femur'):
-            complete_session = (p, s)
-            break
+    # If scan_date specified, find THAT exact date; otherwise find most recent complete
+    selected_session = None
 
-    if not complete_session:
-        raise RuntimeError(
-            f"Patient MRN '{mrn}' has no osteo session with complete spine + femur data. "
-            f"Archive may have incomplete scans."
-        )
+    if scan_date:
+        # Find the session matching the specified date
+        target_date_str = str(scan_date)[:10]  # YYYY-MM-DD
+        for p, s in pat_sessions:
+            sess_date_str = str(s.get('scan_date', ''))[:10]
+            if sess_date_str == target_date_str:
+                selected_session = (p, s)
+                break
 
-    pat, sess = complete_session
+        if not selected_session:
+            raise RuntimeError(
+                f"Patient MRN '{mrn}' has no osteo scan on {target_date_str}. "
+                f"Please select another archive study to link."
+            )
+    else:
+        # Find most recent complete session
+        for p, s in pat_sessions:
+            if s.get('spine') and s.get('left_femur') and s.get('right_femur'):
+                selected_session = (p, s)
+                break
+
+        if not selected_session:
+            raise RuntimeError(
+                f"Patient MRN '{mrn}' has no osteo session with complete spine + femur data. "
+                f"Archive may have incomplete scans."
+            )
+
+    pat, sess = selected_session
 
     return {
         'patient': {
