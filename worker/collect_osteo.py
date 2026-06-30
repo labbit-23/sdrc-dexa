@@ -376,19 +376,13 @@ def build_raw_osteo_json(mrn: str, scan_index: int = 0, scan_date: str = None, m
             f"Available dates: {', '.join(str(s[1].get('scan_date', ''))[:10] for s in pat_sessions)}"
         )
 
-    # Find first session with COMPLETE data (spine + both femurs), not just most recent
-    complete_sessions = [
-        (p, s) for p, s in pat_sessions
-        if s.get('spine') and s.get('left_femur') and s.get('right_femur')
-    ]
-
-    if not complete_sessions:
+    if scan_index >= len(pat_sessions):
         raise RuntimeError(
-            f"Patient {mrn} has no complete osteo scans with spine + both femurs. "
-            f"Available sessions: {len(pat_sessions)}"
+            f"scan_index {scan_index} out of range — "
+            f"patient has {len(pat_sessions)} osteo session(s)."
         )
 
-    pat, sess = complete_sessions[scan_index] if scan_index < len(complete_sessions) else complete_sessions[0]
+    pat, sess = pat_sessions[scan_index]
 
     return {
         'patient': {
