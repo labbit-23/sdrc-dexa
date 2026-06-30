@@ -552,7 +552,8 @@ def upload_osteo_scan(mrn: str,
 def upload_osteo_trend_scan(mrn: str,
                             archive_mdb_path: str,
                             progress_cb=None,
-                            scan_index: int = 0) -> dict:
+                            scan_index: int = 0,
+                            scan_date: str = None) -> dict:
     """
     Upload osteo trend (archive MDB only, no XPS/images):
       1. Read MDB snapshot from archive
@@ -584,8 +585,20 @@ def upload_osteo_trend_scan(mrn: str,
         raise RuntimeError(f'Patient {mrn} has no osteo scan in archive')
 
     # 2. Build raw_json using standardized format (same as regular scans)
-    raw_data = build_raw_osteo_json(mrn, scan_index=scan_index, mdb_path=archive_mdb_path)
+    # If scan_date provided, use that; otherwise use scan_index
+    if scan_date:
+        raw_data = build_raw_osteo_json(mrn, scan_date=scan_date, mdb_path=archive_mdb_path)
+    else:
+        raw_data = build_raw_osteo_json(mrn, scan_index=scan_index, mdb_path=archive_mdb_path)
     raw_json_bytes = json.dumps(raw_data, indent=2, default=_serial).encode()
+
+    # Validate that we got complete data
+    session = raw_data.get('session', {})
+    if not session.get('spine') or not session.get('left_femur') or not session.get('right_femur'):
+        raise RuntimeError(
+            f"Study incomplete or not analysed for MRN {mrn} on {scan_date or 'most recent date'}. "
+            f"Please select another archive study to link."
+        )
 
     # 3. Extract patient/session info from standardized raw_data
     patient_data = {
