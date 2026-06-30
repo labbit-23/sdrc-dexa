@@ -571,38 +571,16 @@ def upload_osteo_trend_scan(mrn: str,
     if not osteo_sessions:
         raise RuntimeError(f'Patient {mrn} has no osteo scan in archive')
 
-    # 2. Extract patient and session from snapshot for raw_json structure
-    first_exam = (mdb_snap.get('exams') or [{}])[0]
-    patient_row = list(mdb_snap.get('patients', {}).values())[0] if mdb_snap.get('patients') else {}
-
-    # Build raw_json with {patient, session} structure (same as regular scans) so it can be rendered as history
+    # 2. Build raw_json (same structure as regular scans)
     raw_data = {
-        'patient': {
-            'pat_handle':  patient_row.get('pat_handle', f"mrn_{mrn}"),
-            'patient_id':  mrn,
-            'mrn':         mrn,
-            'name':        patient_row.get('name', ''),
-            'title':       patient_row.get('title', ''),
-            'dob':         patient_row.get('dob', '').isoformat() if isinstance(patient_row.get('dob'), datetime) else patient_row.get('dob', ''),
-            'gender':      patient_row.get('gender', 'Female'),
-            'ethnicity':   patient_row.get('ethnicity', ''),
-            'height_cm':   patient_row.get('height_cm') or 0,
-            'weight_kg':   patient_row.get('weight_kg') or 0,
-            'bmi':         patient_row.get('bmi') or 0,
-            'physician':   patient_row.get('physician', ''),
-        },
-        'session': {
-            'scan_date':      first_exam.get('_acq_dt', ''),
-            'scanner_serial': first_exam.get('scanner_id') or config.SCANNER_ID,
-            'software':       first_exam.get('software') or config.SOFTWARE,
-            'ntx_filename':   first_exam.get('filename'),
-            'spine':          mdb_snap.get('spine', {}),
-            'left_femur':     mdb_snap.get('left_femur', {}),
-            'right_femur':    mdb_snap.get('right_femur', {}),
-            'estimated_composition': mdb_snap.get('estimated_composition', {}),
-        }
+        'mdb_snapshot': mdb_snap,
+        'xps_bone':     None,
     }
     raw_json_bytes = json.dumps(raw_data, indent=2, default=_serial).encode()
+
+    # 3. Extract patient/session info from snapshot
+    first_exam = (mdb_snap.get('exams') or [{}])[0]
+    patient_row = list(mdb_snap.get('patients', {}).values())[0] if mdb_snap.get('patients') else {}
 
     patient_data = {
         'patient_id': mrn,
