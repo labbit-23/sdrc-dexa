@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Optional
 
 import config
-from parse_mdb import list_patient_sessions
+from parse_mdb import list_patient_sessions, MdbParser
 from parse_xps import extract_xps_text, extract_osteo_images, render_osteo_overlay_pages
 
 log = logging.getLogger(__name__)
