@@ -149,6 +149,13 @@ def main():
         logging.warning('No XPS files found in %s for patient %s', xps_dir, patient_id)
         return
 
+    # If combined XPS exists, use it for spine/femur; separate forearm files still extracted
+    if 'combined' in xps_map:
+        combined_path = xps_map['combined']
+        xps_map['spine'] = xps_map.get('spine', combined_path)
+        xps_map['left_femur'] = xps_map.get('left_femur', combined_path)
+        xps_map['right_femur'] = xps_map.get('right_femur', combined_path)
+
     images = extract_osteo_images(
         spine_xps        = xps_map.get('spine', ''),
         left_femur_xps   = xps_map.get('left_femur', ''),
