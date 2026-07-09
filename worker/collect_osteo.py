@@ -50,26 +50,36 @@ XPS_LABELS = ('spine', 'left_femur', 'right_femur')
 
 def _classify_xps(xps_path: str) -> str:
     """
-    Read text from an XPS file and classify it as
-    'spine' | 'left_femur' | 'right_femur' | 'combined' | 'dual_femur' | 'unknown'.
+    Read text from an XPS file and classify it as:
+    'spine' | 'left_femur' | 'right_femur' | 'left_forearm' | 'right_forearm' |
+    'combined' | 'dual_femur' | 'unknown'.
 
-    GE Lunar often produces combined XPS files containing all three scan
-    types (AP Spine + Left Femur + Right Femur) in a single document.
-    These are classified as 'combined' and used for all three slots.
-    A dual-femur-only XPS (no spine) is classified as 'dual_femur'.
+    GE Lunar produces combined XPS files containing all three scan types
+    (AP Spine + Left Femur + Right Femur) in a single document; classified as 'combined'.
+    Separate forearm scans are classified as 'left_forearm' or 'right_forearm'.
     """
     try:
         tokens = ' '.join(t for _, _, t in extract_xps_text(xps_path))
     except Exception as e:
         log.warning("Could not read XPS text from %s: %s", xps_path, e)
         return 'unknown'
-    has_spine  = any(x in tokens for x in ['Lumbar', 'Spine', 'lumbar', 'spine', 'AP Spine'])
-    has_femur  = any(x in tokens for x in ['Femur', 'femur', 'Neck', 'Trochanter'])
-    has_left   = any(x in tokens for x in ['Left', 'left', 'LEFT'])
-    has_right  = any(x in tokens for x in ['Right', 'right', 'RIGHT'])
+    has_spine    = any(x in tokens for x in ['Lumbar', 'Spine', 'lumbar', 'spine', 'AP Spine'])
+    has_femur    = any(x in tokens for x in ['Femur', 'femur', 'Neck', 'Trochanter'])
+    has_forearm  = any(x in tokens for x in ['Forearm', 'forearm', 'Radius', 'Ulna', 'radius', 'ulna'])
+    has_left     = any(x in tokens for x in ['Left', 'left', 'LEFT'])
+    has_right    = any(x in tokens for x in ['Right', 'right', 'RIGHT'])
+
+    # Forearm scans (no femur)
+    if has_forearm and not has_femur:
+        if has_left and not has_right:
+            return 'left_forearm'
+        if has_right and not has_left:
+            return 'right_forearm'
+
+    # Hip/spine scans
     if has_spine and has_femur and has_left and has_right:
         return 'combined'
-    if has_spine and not has_femur:
+    if has_spine and not has_femur and not has_forearm:
         return 'spine'
     if has_femur and has_left and has_right and not has_spine:
         return 'dual_femur'

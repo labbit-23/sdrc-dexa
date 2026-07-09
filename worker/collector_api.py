@@ -130,10 +130,12 @@ def _derive_scan_components(session_or_sessions) -> dict:
 
     Returns:
       mdb_scan_type   – 'total_body' if any session is total_body, else 'osteo'
-      scan_components – sorted list, e.g. ['AP Spine', 'Left Femur', 'Total Body']
+      scan_components – sorted list, e.g. ['AP Spine', 'Left Femur', 'Left Forearm', 'Total Body']
       has_spine       – bool
       has_left_femur  – bool
       has_right_femur – bool
+      has_left_forearm – bool
+      has_right_forearm – bool
       has_total_body  – bool
       has_osteo       – bool
     """
@@ -147,24 +149,30 @@ def _derive_scan_components(session_or_sessions) -> dict:
     has_spine      = any(bool(s.get('spine'))       for s in sessions)
     has_left       = any(bool(s.get('left_femur'))  for s in sessions)
     has_right      = any(bool(s.get('right_femur')) for s in sessions)
+    has_left_fa    = any(bool(s.get('left_forearm'))  for s in sessions)
+    has_right_fa   = any(bool(s.get('right_forearm')) for s in sessions)
 
     components = []
     if has_total_body:              components.append('Total Body')
     if has_spine:                   components.append('AP Spine')
     if has_left:                    components.append('Left Femur')
     if has_right:                   components.append('Right Femur')
+    if has_left_fa:                 components.append('Left Forearm')
+    if has_right_fa:                components.append('Right Forearm')
 
     # Primary routing type: total_body takes precedence when both exist
     mdb_scan_type = 'total_body' if has_total_body else 'osteo'
 
     return {
-        'mdb_scan_type':   mdb_scan_type,
-        'scan_components': components,
-        'has_spine':       has_spine,
-        'has_left_femur':  has_left,
-        'has_right_femur': has_right,
-        'has_total_body':  has_total_body,
-        'has_osteo':       has_osteo,
+        'mdb_scan_type':    mdb_scan_type,
+        'scan_components':  components,
+        'has_spine':        has_spine,
+        'has_left_femur':   has_left,
+        'has_right_femur':  has_right,
+        'has_left_forearm':  has_left_fa,
+        'has_right_forearm': has_right_fa,
+        'has_total_body':   has_total_body,
+        'has_osteo':        has_osteo,
     }
 
 
@@ -469,8 +477,8 @@ def upload(patient_id: str, body: UploadBody):
                         xps_map['composition'] = p
                 result = upload_totalbody_scan(patient_id, xps_map, progress_cb=_cb)
             else:
-                # Osteo: _classify_xps only maps XPS files to image slots
-                # (spine / left_femur / right_femur / combined / dual_femur).
+                # Osteo: _classify_xps maps XPS files to image slots
+                # (spine / left_femur / right_femur / left_forearm / right_forearm / combined / dual_femur).
                 # The osteo vs total-body routing was already decided by MDB above.
                 from collect_osteo import upload_osteo_scan, _classify_xps
                 xps_map = {}
@@ -482,7 +490,7 @@ def upload(patient_id: str, body: UploadBody):
                     elif label == 'dual_femur':
                         xps_map = {'left_femur': p, 'right_femur': p}
                         break
-                    elif label in ('spine', 'left_femur', 'right_femur'):
+                    elif label in ('spine', 'left_femur', 'right_femur', 'left_forearm', 'right_forearm'):
                         xps_map[label] = p
                 result = upload_osteo_scan(patient_id, xps_map, progress_cb=_cb, scan_date=body.scan_date)
 
