@@ -68,10 +68,14 @@ def _parse_all_strip_bounds(xps_path: str) -> dict[str, tuple[float, float, floa
     Parse the fpage XAML and return crop bounds (in XPS units) for each scan region
     by grouping ImageBrush Viewports by strip number.
 
-    GE Lunar strip assignments (verified):
+    GE Lunar strip assignments (verified for combined XPS):
       Strips  1– 9  → 'spine'
       Strips 10–18  → 'left_femur'
       Strips 19–28  → 'right_femur'   (strip 29 = RGBA colour-scale bar, excluded)
+
+    Note: Position-based region detection (_parse_zone_region) is preferred;
+    hardcoded ranges below are fallback only. Forearm regions detected via
+    "Densitometry Reference:" labels in XAML text, not strip numbers.
 
     Returns dict with keys from the above set, only for regions that have strips.
     Values are (x1, y1, x2, y2) in XPS units with a small margin.
@@ -306,7 +310,7 @@ def _zone_region_name(
     used: set[str],
 ) -> str:
     """
-    Classify a Y zone as 'spine', 'left_femur', or 'right_femur' by searching
+    Classify a Y zone as 'spine', 'left_femur', 'right_femur', 'left_forearm', or 'right_forearm' by searching
     XAML glyph text between y_search_lo and y_search_hi.
 
     Looks for "Densitometry Reference:" lines (the most reliable anchor) first,
@@ -321,22 +325,32 @@ def _zone_region_name(
     # "Densitometry Reference: AP Spine / Lumbar Spine" → spine
     if re.search(r'densitometry\s+reference[^.]{0,60}(?:ap\s+spine|lumbar)', zone_text):
         name = 'spine'
-    # "Densitometry Reference: Left …" → left_femur
-    elif re.search(r'densitometry\s+reference[^.]{0,60}left', zone_text):
+    # "Densitometry Reference: Left Forearm" → left_forearm
+    elif re.search(r'densitometry\s+reference[^.]{0,60}left.*forearm', zone_text):
+        name = 'left_forearm'
+    # "Densitometry Reference: Right Forearm" → right_forearm
+    elif re.search(r'densitometry\s+reference[^.]{0,60}right.*forearm', zone_text):
+        name = 'right_forearm'
+    # "Densitometry Reference: Left …" (femur) → left_femur
+    elif re.search(r'densitometry\s+reference[^.]{0,60}left(?!.*forearm)', zone_text):
         name = 'left_femur'
-    # "Densitometry Reference: Right …" → right_femur
-    elif re.search(r'densitometry\s+reference[^.]{0,60}right', zone_text):
+    # "Densitometry Reference: Right …" (femur) → right_femur
+    elif re.search(r'densitometry\s+reference[^.]{0,60}right(?!.*forearm)', zone_text):
         name = 'right_femur'
     # Broader keyword fallback
     elif re.search(r'\b(?:lumbar|ap\s+spine|l1[-–]l4)\b', zone_text) and 'spine' not in used:
         name = 'spine'
+    elif re.search(r'\bleft\b', zone_text) and re.search(r'\b(?:forearm|radius|ulna)\b', zone_text) and 'left_forearm' not in used:
+        name = 'left_forearm'
+    elif re.search(r'\bright\b', zone_text) and re.search(r'\b(?:forearm|radius|ulna)\b', zone_text) and 'right_forearm' not in used:
+        name = 'right_forearm'
     elif re.search(r'\bleft\b', zone_text) and re.search(r'\b(?:femur|proximal|hip|neck)\b', zone_text) and 'left_femur' not in used:
         name = 'left_femur'
     elif re.search(r'\bright\b', zone_text) and re.search(r'\b(?:femur|proximal|hip|neck)\b', zone_text) and 'right_femur' not in used:
         name = 'right_femur'
     else:
-        # Pure positional fallback: spine → left_femur → right_femur
-        for candidate in ('spine', 'left_femur', 'right_femur'):
+        # Pure positional fallback: spine → left_femur → right_femur → left_forearm → right_forearm
+        for candidate in ('spine', 'left_femur', 'right_femur', 'left_forearm', 'right_forearm'):
             if candidate not in used:
                 name = candidate
                 break
