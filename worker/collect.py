@@ -99,11 +99,19 @@ def get_recent_patients(
         )
         session  = all_sessions[0] if all_sessions else {}
 
+        # For component display, only use sessions from THIS date to avoid mixing
+        # old total_body scans (from different dates) with current forearm scans
+        sessions_this_date = [
+            s for s in all_sessions
+            if s.get('scan_date') and s['scan_date'].date() == acq.date()
+        ]
+        sessions_for_display = sessions_this_date if sessions_this_date else [session]
+
         xps_found = find_xps_for_patient(pid, acq)
         results.append({
             'patient':     patient,
             'session':     session,    # most-recent session (for compat)
-            'sessions':    all_sessions,  # all sessions (for component display)
+            'sessions':    sessions_for_display,  # sessions from this date only
             'scan_date':   acq,
             'xps_files':   xps_found,
             'xps_missing': len(xps_found) == 0,
