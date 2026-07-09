@@ -54,8 +54,21 @@ SPINE_LABELS_TOTALBODY = {
     31: 'L3-L4',
 }
 
+FOREARM_LABELS = {
+    1: 'Radius UD',
+    2: 'Ulna UD',
+    3: 'Radius 33%',
+    4: 'Ulna 33%',
+    25: 'Both UD',
+    26: 'Both 33%',
+    27: 'Radius Total',
+    28: 'Ulna Total',
+    29: 'Both Total',
+}
+
 DISPLAY_SPINE = ['L1', 'L2', 'L3', 'L4', 'L1-L4']
 DISPLAY_FEMUR = ['Neck', 'Wards', 'Trochanter', 'Total']
+DISPLAY_FOREARM = ['Radius UD', 'Ulna UD', 'Radius 33%', 'Ulna 33%', 'Both UD', 'Both 33%', 'Radius Total', 'Ulna Total', 'Both Total']
 
 # Composition labels — two label sets depending on scan type:
 #
@@ -352,6 +365,8 @@ class MdbParser:
             'spine':          {},
             'left_femur':     {},
             'right_femur':    {},
+            'left_forearm':   {},
+            'right_forearm':  {},
         }
 
         # Spine from body/spine scan
@@ -371,6 +386,16 @@ class MdbParser:
         # Right femur
         if right_img:
             session['right_femur'] = self._extract_femur(right_img['img_handle'])
+
+        # Left forearm (scantype=12, side=1)
+        left_forearm_img = next((e for e in imgs if e['_scantype_int'] == 12 and e['_side_int'] == 1), None)
+        if left_forearm_img:
+            session['left_forearm'] = self._extract_forearm(left_forearm_img['img_handle'])
+
+        # Right forearm (scantype=12, side=2)
+        right_forearm_img = next((e for e in imgs if e['_scantype_int'] == 12 and e['_side_int'] == 2), None)
+        if right_forearm_img:
+            session['right_forearm'] = self._extract_forearm(right_forearm_img['img_handle'])
 
         return session
 
@@ -491,6 +516,26 @@ class MdbParser:
             label = _label_int(row.get('label'))
             site = FEMUR_LABELS.get(label)
             if site is None or site not in DISPLAY_FEMUR:
+                continue
+            norm = self._norm.get(row.get('dens_handle', ''), {})
+            result[site] = {
+                'bmd':   _safe_float(row.get('bmd')),
+                'bmc':   _safe_float(row.get('bmc')),
+                'area':  _safe_float(row.get('area')),
+                'T':     _safe_float_score(norm.get('zsco_bmd_ya')),
+                'Z':     _safe_float_score(norm.get('zsco_bmd_am')),
+                'pYA':   _safe_float(norm.get('percent_ya')),
+                'source': 'MDB',
+            }
+        return result
+
+    def _extract_forearm(self, img_handle: str) -> dict:
+        dens_rows = self._densitometry.get(img_handle, [])
+        result = {}
+        for row in dens_rows:
+            label = _label_int(row.get('label'))
+            site = FOREARM_LABELS.get(label)
+            if site is None or site not in DISPLAY_FOREARM:
                 continue
             norm = self._norm.get(row.get('dens_handle', ''), {})
             result[site] = {
