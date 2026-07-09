@@ -239,15 +239,31 @@ _GLYPH_RE = re.compile(
 def _collect_strip_viewports(xps_path: str) -> tuple[str, list[tuple[int, float, float, float, float]]]:
     """
     Open the XPS ZIP, identify valid scan strips (non-RGBA, h≥20, w≥100),
-    parse their Viewport positions from the fpage XAML, and return
-    (fpage_text, [(strip_num, x, y, x2, y2), ...]).
+    parse their Viewport positions from all fpage XMLs, and return
+    (combined_fpages_text, [(strip_num, x, y, x2, y2), ...]).
 
     Strips that appear at identical positions (same num+x+y) are deduplicated —
     GE Lunar reuses strip 1 as a header row in both hip columns.
+
+    Reads from all pages in case of multi-page reports (e.g., page 1: spine/femur,
+    page 2: forearm).
     """
     try:
         with zipfile.ZipFile(xps_path) as z:
-            fpage = z.read("Documents/1/Pages/1.fpage").decode("utf-8", errors="replace")
+            # Read all pages (not just page 1)
+            fpage_texts = []
+            for name in sorted(z.namelist()):
+                if '/Pages/' in name and name.endswith('.fpage'):
+                    try:
+                        fpage_texts.append(z.read(name).decode("utf-8", errors="replace"))
+                    except Exception:
+                        pass
+
+            if not fpage_texts:
+                return '', []
+
+            fpage = '\n'.join(fpage_texts)  # Combine all pages
+
             valid: set[int] = set()
             for name in z.namelist():
                 if 'Images' not in name or not name.upper().endswith('.PNG'):
