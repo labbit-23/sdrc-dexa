@@ -1112,41 +1112,59 @@ def _extract_scan_strips(xps_path: str) -> Optional[Image.Image]:
 
 
 def extract_osteo_images(
-    spine_xps: str,
-    left_femur_xps: str,
-    right_femur_xps: str,
+    spine_xps: str = '',
+    left_femur_xps: str = '',
+    right_femur_xps: str = '',
+    left_forearm_xps: str = '',
+    right_forearm_xps: str = '',
 ) -> dict[str, Image.Image]:
     """
     Extract DEXA scan images from per-scan or combined XPS files (osteo workflow).
 
-    If all three paths point to the same file (GE Lunar combined XPS), the strip
-    range assignment (strips 1-9 spine, 10-18 left femur, 19-29 right femur) is
-    used via extract_scan_images().  Otherwise each XPS is treated as a
-    single-scan file and strips are detected dynamically.
+    If spine, left_femur, and right_femur all point to the same file (GE Lunar
+    combined XPS), the strip range assignment (strips 1-9 spine, 10-18 left femur,
+    19-29 right femur) is used via extract_scan_images(). Otherwise each XPS is
+    treated as a single-scan file and strips are detected dynamically.
 
-    Returns dict with keys: 'spine', 'left_femur', 'right_femur'
-    (only includes keys where an image was successfully extracted).
+    Forearm XPS files (if present) are always treated as single-scan files.
+
+    Returns dict with keys: 'spine', 'left_femur', 'right_femur', 'left_forearm',
+    'right_forearm' (only includes keys where an image was successfully extracted).
     """
     paths = {
-        'spine':       spine_xps,
-        'left_femur':  left_femur_xps,
-        'right_femur': right_femur_xps,
+        'spine':        spine_xps,
+        'left_femur':   left_femur_xps,
+        'right_femur':  right_femur_xps,
+        'left_forearm':  left_forearm_xps,
+        'right_forearm': right_forearm_xps,
     }
 
-    # ── Combined XPS: ALL three labels present and point to the same file ──────
-    # (not just 1 unique path — that also matches a spine-only per-scan case)
-    all_three_same = (
+    # ── Combined XPS: spine, left_femur, right_femur all point to same file ────
+    osteo_three_same = (
         spine_xps and left_femur_xps and right_femur_xps
         and spine_xps == left_femur_xps == right_femur_xps
     )
-    if all_three_same:
+    if osteo_three_same:
         combined_path = spine_xps
         log.info("Combined XPS detected — using strip-range extraction: %s", combined_path)
+        result: dict[str, Image.Image] = {}
         try:
-            return extract_scan_images(combined_path)
+            result = extract_scan_images(combined_path)
         except Exception as e:
             log.warning("extract_scan_images failed on combined XPS: %s", e)
-            return {}
+
+        # Handle separate forearm XPS files if present
+        for label in ('left_forearm', 'right_forearm'):
+            if paths[label]:
+                try:
+                    img = _extract_scan_strips(paths[label])
+                    if img:
+                        result[label] = img
+                    else:
+                        log.warning("No strips found in %s", paths[label])
+                except Exception as e:
+                    log.warning("Failed to extract %s from %s: %s", label, paths[label], e)
+        return result
 
     # ── Separate per-scan XPS files ──────────────────────────────────────────
     result: dict[str, Image.Image] = {}

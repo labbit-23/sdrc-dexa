@@ -35,43 +35,62 @@ def _serial(obj):
 
 
 def _classify_xps(xps_path: str) -> str:
-    """Return 'spine', 'left_femur', 'right_femur', or 'unknown'."""
+    """Return 'spine', 'left_femur', 'right_femur', 'left_forearm', 'right_forearm', or 'unknown'."""
     try:
         tokens = ' '.join(t for _, _, t in extract_xps_text(xps_path))
     except Exception:
         return 'unknown'
-    has_spine  = any(x in tokens for x in ['Lumbar', 'Spine', 'lumbar', 'spine'])
-    has_femur  = any(x in tokens for x in ['Femur', 'femur', 'Neck', 'Trochanter'])
-    has_left   = any(x in tokens for x in ['Left', 'left', 'LEFT'])
-    has_right  = any(x in tokens for x in ['Right', 'right', 'RIGHT'])
-    if has_spine and not has_femur:
+    has_spine    = any(x in tokens for x in ['Lumbar', 'Spine', 'lumbar', 'spine'])
+    has_femur    = any(x in tokens for x in ['Femur', 'femur', 'Neck', 'Trochanter'])
+    has_forearm  = any(x in tokens for x in ['Forearm', 'forearm', 'Radius', 'Ulna', 'radius', 'ulna'])
+    has_left     = any(x in tokens for x in ['Left', 'left', 'LEFT'])
+    has_right    = any(x in tokens for x in ['Right', 'right', 'RIGHT'])
+    if has_spine and not has_femur and not has_forearm:
         return 'spine'
-    if has_femur and has_left and not has_right:
+    if has_femur and not has_forearm and has_left and not has_right:
         return 'left_femur'
-    if has_femur and has_right and not has_left:
+    if has_femur and not has_forearm and has_right and not has_left:
         return 'right_femur'
+    if has_forearm and not has_femur and has_left and not has_right:
+        return 'left_forearm'
+    if has_forearm and not has_femur and has_right and not has_left:
+        return 'right_forearm'
     return 'unknown'
 
 
 def detect_xps_files(patient_id: str, xps_dir: str) -> dict[str, str]:
     """
-    Scan xps_dir for files named {patient_id}-N.xps and classify each.
-    Returns {'spine': path, 'left_femur': path, 'right_femur': path}.
-    Stops classifying once all three are found.
+    Scan xps_dir for XPS files and classify each.
+    Searches for:
+    - {patient_id}.xps (combined: spine, femur, etc.)
+    - {patient_id}-N.xps (numbered: -1, -2, etc.)
+    - {patient_id}-FOREARM*.xps (forearm-specific)
+    Returns dict with keys like 'spine', 'left_femur', 'right_femur', 'left_forearm', 'right_forearm'
     """
     xps_dir = Path(xps_dir)
     mapping: dict[str, str] = {}
+
+    # Start with combined file if it exists
+    combined = xps_dir / f'{patient_id}.xps'
+    if combined.exists():
+        mapping['combined'] = str(combined)
+        logging.info('Found combined XPS: %s', combined.name)
+
+    # Then scan for numbered or site-specific files
     candidates = sorted(
         xps_dir.glob(f'{patient_id}-*.xps'),
-        key=lambda p: int(p.stem.split('-')[-1])
+        key=lambda p: (
+            p.stem.split('-')[-1].isdigit(),  # put numbered files first
+            int(p.stem.split('-')[-1]) if p.stem.split('-')[-1].isdigit() else 0
+        )
     )
+
     for xps_path in candidates:
-        if len(mapping) == 3:
-            break
         label = _classify_xps(str(xps_path))
-        if label in ('spine', 'left_femur', 'right_femur') and label not in mapping:
+        if label != 'unknown' and label not in mapping:
             mapping[label] = str(xps_path)
             logging.info('Classified %s → %s', xps_path.name, label)
+
     return mapping
 
 
@@ -111,6 +130,8 @@ def main():
             'spine':          sess.get('spine', {}),
             'left_femur':     sess.get('left_femur', {}),
             'right_femur':    sess.get('right_femur', {}),
+            'left_forearm':   sess.get('left_forearm', {}),
+            'right_forearm':  sess.get('right_forearm', {}),
         },
     }
 
@@ -129,18 +150,22 @@ def main():
         return
 
     images = extract_osteo_images(
-        spine_xps       = xps_map.get('spine', ''),
-        left_femur_xps  = xps_map.get('left_femur', ''),
-        right_femur_xps = xps_map.get('right_femur', ''),
+        spine_xps        = xps_map.get('spine', ''),
+        left_femur_xps   = xps_map.get('left_femur', ''),
+        right_femur_xps  = xps_map.get('right_femur', ''),
+        left_forearm_xps  = xps_map.get('left_forearm', ''),
+        right_forearm_xps = xps_map.get('right_forearm', ''),
     )
 
     img_dir = Path(out_dir) / patient_id
     img_dir.mkdir(parents=True, exist_ok=True)
 
     name_map = {
-        'spine':       'img_spine.png',
-        'left_femur':  'img_left_femur.png',
-        'right_femur': 'img_right_femur.png',
+        'spine':        'img_spine.png',
+        'left_femur':   'img_left_femur.png',
+        'right_femur':  'img_right_femur.png',
+        'left_forearm':  'img_left_forearm.png',
+        'right_forearm': 'img_right_forearm.png',
     }
     for label, img in images.items():
         out_path = img_dir / name_map[label]

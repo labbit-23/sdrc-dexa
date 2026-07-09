@@ -371,7 +371,7 @@ def archive_all(q: Optional[str] = None, max_count: int = 500):
 
 
 @app.post('/archive/trend/{patient_id}')
-def archive_trend(patient_id: str, body: TrendBody, mdb: Optional[str] = None):
+def archive_trend(patient_id: str, body: TrendBody, mdb: Optional[str] = None, date: Optional[str] = None):
     """Upload a trend record from an archive MDB (no XPS). Pass ?mdb=label to target a specific archive."""
     from pathlib import Path as _Path
 
@@ -401,6 +401,7 @@ def archive_trend(patient_id: str, body: TrendBody, mdb: Optional[str] = None):
                 result = upload_osteo_trend_scan(
                     patient_id, a['path'],
                     progress_cb=lambda m: msgs.append(m),
+                    scan_date=date,
                 )
             else:
                 raise ValueError(f'Invalid trend scan_type: {body.scan_type}')

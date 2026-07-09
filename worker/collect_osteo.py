@@ -453,15 +453,19 @@ def extract_images(xps_map: dict[str, str],
 
     images: dict[str, bytes] = {}
     raw = extract_osteo_images(
-        spine_xps       = xps_map.get('spine', ''),
-        left_femur_xps  = xps_map.get('left_femur', ''),
-        right_femur_xps = xps_map.get('right_femur', ''),
+        spine_xps        = xps_map.get('spine', ''),
+        left_femur_xps   = xps_map.get('left_femur', ''),
+        right_femur_xps  = xps_map.get('right_femur', ''),
+        left_forearm_xps  = xps_map.get('left_forearm', ''),
+        right_forearm_xps = xps_map.get('right_forearm', ''),
     )
 
     label_to_filename = {
-        'spine':       'img_spine.png',
-        'left_femur':  'img_left_femur.png',
-        'right_femur': 'img_right_femur.png',
+        'spine':        'img_spine.png',
+        'left_femur':   'img_left_femur.png',
+        'right_femur':  'img_right_femur.png',
+        'left_forearm':  'img_left_forearm.png',
+        'right_forearm': 'img_right_forearm.png',
     }
 
     for label, img in raw.items():
