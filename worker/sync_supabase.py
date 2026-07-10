@@ -449,9 +449,11 @@ def upload_osteo_raw(
 
     # Overlay pages (mutool-rendered, ROI lines baked in; keyed by filename)
     overlay_files = {
-        'img_spine_overlay.png':       'spine_overlay',
-        'img_left_femur_overlay.png':  'left_femur_overlay',
-        'img_right_femur_overlay.png': 'right_femur_overlay',
+        'img_spine_overlay.png':        'spine_overlay',
+        'img_left_femur_overlay.png':   'left_femur_overlay',
+        'img_right_femur_overlay.png':  'right_femur_overlay',
+        'img_left_forearm_overlay.png': 'left_forearm_overlay',
+        'img_right_forearm_overlay.png':'right_forearm_overlay',
     }
     for fname, key in overlay_files.items():
         if fname in (png_images or {}):
