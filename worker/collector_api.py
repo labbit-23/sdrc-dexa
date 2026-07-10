@@ -526,7 +526,7 @@ def upload(patient_id: str, body: UploadBody):
                         break
                     elif label in ('spine', 'left_femur', 'right_femur', 'left_forearm', 'right_forearm'):
                         xps_map[label] = p
-                result = upload_osteo_scan(patient_id, xps_map, progress_cb=_cb, scan_date=body.scan_date)
+                result = upload_osteo_scan(patient_id, xps_map, progress_cb=_cb, scan_date=body.scan_date, scan_type=mdb_scan_type)
 
             q.put({'done': True, 'result': _jsonify(result)})
         except Exception as e:
