@@ -479,7 +479,17 @@ def upload(patient_id: str, body: UploadBody):
                     if session:
                         base_type = session.get('mdb_scan_type', 'osteo')
                         if base_type == 'osteo':
-                            mdb_scan_type = _osteo_scan_type(session)
+                            has_spine = bool(session.get('spine'))
+                            has_femur = bool(session.get('left_femur')) or bool(session.get('right_femur'))
+                            has_forearm = bool(session.get('left_forearm')) or bool(session.get('right_forearm'))
+                            if has_spine and has_femur:
+                                mdb_scan_type = 'spine_femur'
+                            elif has_femur:
+                                mdb_scan_type = 'dual_femur'
+                            elif has_spine:
+                                mdb_scan_type = 'spine_only'
+                            elif has_forearm:
+                                mdb_scan_type = 'forearm'
                         else:
                             mdb_scan_type = base_type
                 log.info('upload %s: MDB scan type = %s', patient_id, mdb_scan_type)
