@@ -269,7 +269,7 @@ def db_mrns():
 
 @app.get('/xps/{patient_id}')
 def xps_for_patient(patient_id: str):
-    """Check which XPS files exist for a given patient, with scan-type labels."""
+    """Check which XPS files exist for a given patient, with detailed content labels."""
     from pathlib import Path as _Path
     from collect_osteo import _classify_xps
 
@@ -278,14 +278,12 @@ def xps_for_patient(patient_id: str):
     for f in files:
         try:
             label = _classify_xps(f)
-            # Map classification to UI type: forearm/spine/femur → osteo, total_body → total_body
-            if label in ('left_forearm', 'right_forearm', 'spine', 'left_femur', 'right_femur', 'combined', 'dual_femur'):
-                xtype = 'osteo'
-            else:
-                xtype = 'unknown'
+            # Return the actual classification so UI can show what's in each file
+            # Possible values: 'left_forearm', 'right_forearm', 'spine', 'left_femur',
+            # 'right_femur', 'combined' (multiple osteo sites), 'total_body', 'unknown'
         except Exception:
-            xtype = 'unknown'
-        typed.append({'path': f, 'name': _Path(f).name, 'type': xtype})
+            label = 'unknown'
+        typed.append({'path': f, 'name': _Path(f).name, 'sites': label})
 
     return {'patient_id': patient_id, 'xps_files': files, 'xps_typed': typed, 'found': len(files) > 0}
 
