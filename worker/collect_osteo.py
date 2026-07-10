@@ -378,6 +378,8 @@ def build_raw_osteo_json(mrn: str, scan_index: int = 0, scan_date: str = None, m
                         'spine':                 sess.get('spine', {}),
                         'left_femur':            sess.get('left_femur', {}),
                         'right_femur':           sess.get('right_femur', {}),
+                        'left_forearm':          sess.get('left_forearm', {}),
+                        'right_forearm':         sess.get('right_forearm', {}),
                         'estimated_composition': sess.get('estimated_composition', {}),
                     }
                 }
@@ -444,6 +446,8 @@ def build_raw_osteo_json(mrn: str, scan_index: int = 0, scan_date: str = None, m
             'spine':                 sess.get('spine', {}),
             'left_femur':            sess.get('left_femur', {}),
             'right_femur':           sess.get('right_femur', {}),
+            'left_forearm':          sess.get('left_forearm', {}),
+            'right_forearm':         sess.get('right_forearm', {}),
             'estimated_composition': sess.get('estimated_composition', {}),
         },
     }
@@ -497,15 +501,19 @@ def extract_images(xps_map: dict[str, str],
     # ── Overlay pages via mutool (ROI boxes baked in) ────────────────────────
     _notify("  Rendering overlay pages…")
     overlay_map = {
-        'spine_overlay':       'img_spine_overlay.png',
-        'left_femur_overlay':  'img_left_femur_overlay.png',
-        'right_femur_overlay': 'img_right_femur_overlay.png',
+        'spine_overlay':           'img_spine_overlay.png',
+        'left_femur_overlay':      'img_left_femur_overlay.png',
+        'right_femur_overlay':     'img_right_femur_overlay.png',
+        'left_forearm_overlay':    'img_left_forearm_overlay.png',
+        'right_forearm_overlay':   'img_right_forearm_overlay.png',
     }
     try:
         overlays = render_osteo_overlay_pages(
-            spine_xps       = xps_map.get('spine', ''),
-            left_femur_xps  = xps_map.get('left_femur', ''),
-            right_femur_xps = xps_map.get('right_femur', ''),
+            spine_xps        = xps_map.get('spine', ''),
+            left_femur_xps   = xps_map.get('left_femur', ''),
+            right_femur_xps  = xps_map.get('right_femur', ''),
+            left_forearm_xps  = xps_map.get('left_forearm', ''),
+            right_forearm_xps = xps_map.get('right_forearm', ''),
         )
         for key, fname in overlay_map.items():
             if key in overlays:
@@ -525,7 +533,8 @@ def upload_osteo_scan(mrn: str,
                       xps_map: dict[str, str],
                       progress_cb=None,
                       scan_index: int = 0,
-                      scan_date: str = None) -> dict:
+                      scan_date: str = None,
+                      scan_type: str = None) -> dict:
     """
     Full osteo upload for one patient:
       1. Read MDB → raw_osteo.json
@@ -567,6 +576,7 @@ def upload_osteo_scan(mrn: str,
         png_images   = images,
         patient_data = raw_data['patient'],
         session_data = raw_data['session'],
+        scan_type    = scan_type,
     )
 
     puuid = result.get('patient_uuid')
