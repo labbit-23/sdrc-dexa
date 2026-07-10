@@ -269,21 +269,33 @@ def db_mrns():
 
 @app.get('/xps/{patient_id}')
 def xps_for_patient(patient_id: str):
-    """Check which XPS files exist for a given patient, with detailed content labels."""
+    """Check which XPS files exist for a given patient, with detailed content labels and dates."""
     from pathlib import Path as _Path
     from collect_osteo import _classify_xps
+    import os
 
     files = find_xps_for_patient(patient_id)
     typed = []
     for f in files:
         try:
             label = _classify_xps(f)
-            # Return the actual classification so UI can show what's in each file
-            # Possible values: 'left_forearm', 'right_forearm', 'spine', 'left_femur',
-            # 'right_femur', 'combined' (multiple osteo sites), 'total_body', 'unknown'
         except Exception:
             label = 'unknown'
-        typed.append({'path': f, 'name': _Path(f).name, 'sites': label})
+
+        # Get file modification time
+        mtime_iso = None
+        try:
+            mtime = os.path.getmtime(f)
+            mtime_iso = datetime.fromtimestamp(mtime).isoformat()
+        except:
+            pass
+
+        typed.append({
+            'path': f,
+            'name': _Path(f).name,
+            'sites': label,
+            'modified': mtime_iso,
+        })
 
     return {'patient_id': patient_id, 'xps_files': files, 'xps_typed': typed, 'found': len(files) > 0}
 
