@@ -1312,20 +1312,23 @@ def render_osteo_overlay_pages(
     spine_xps: str = None,
     left_femur_xps: str = None,
     right_femur_xps: str = None,
+    left_forearm_xps: str = None,
+    right_forearm_xps: str = None,
     dpi: int = 200,
 ) -> dict[str, bytes]:
     """
     Render XPS pages to PNG using mutool, preserving the ROI overlay lines
-    (the L1-L4 boxes, femur neck lines, etc.) that are XAML vector paths and
+    (the L1-L4 boxes, femur neck lines, forearm bounds, etc.) that are XAML vector paths and
     cannot be captured from raw strip PNGs.
 
     Returns dict with PNG bytes keyed by slot name:
-      'spine_overlay'       — page(s) from the spine XPS
-      'left_femur_overlay'  — page(s) from the left femur XPS
-      'right_femur_overlay' — page(s) from the right femur XPS
+      'spine_overlay'            — page(s) from the spine XPS
+      'left_femur_overlay'       — page(s) from the left femur XPS
+      'right_femur_overlay'      — page(s) from the right femur XPS
+      'left_forearm_overlay'     — page(s) from the left forearm XPS
+      'right_forearm_overlay'    — page(s) from the right forearm XPS
 
-    For combined XPS (all three labels point to same file) the pages are split:
-      page 1 → spine, page 2 → left femur, page 3 → right femur.
+    For combined XPS (all labels point to same file) the pages are split accordingly.
 
     Missing keys mean rendering failed or no XPS was provided.
     """
@@ -1391,14 +1394,18 @@ def render_osteo_overlay_pages(
 
     # Separate XPS files — each has its own single page
     _slot_to_region = {
-        'spine_overlay':       'spine',
-        'left_femur_overlay':  'left_femur',
-        'right_femur_overlay': 'right_femur',
+        'spine_overlay':            'spine',
+        'left_femur_overlay':       'left_femur',
+        'right_femur_overlay':      'right_femur',
+        'left_forearm_overlay':     'left_forearm',
+        'right_forearm_overlay':    'right_forearm',
     }
     for label, path in [
-        ('spine_overlay',       spine_xps),
-        ('left_femur_overlay',  left_femur_xps),
-        ('right_femur_overlay', right_femur_xps),
+        ('spine_overlay',           spine_xps),
+        ('left_femur_overlay',      left_femur_xps),
+        ('right_femur_overlay',     right_femur_xps),
+        ('left_forearm_overlay',    left_forearm_xps),
+        ('right_forearm_overlay',   right_forearm_xps),
     ]:
         if not path:
             continue
