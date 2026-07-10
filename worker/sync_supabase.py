@@ -271,7 +271,7 @@ def _osteo_scan_type(session: dict) -> str:
     return 'osteo'
 
 
-def upsert_scan(sb: Client, patient_uuid: str, session: dict) -> str:
+def upsert_scan(sb: Client, patient_uuid: str, session: dict, scan_type: str = None) -> str:
     """Upsert scan row. Returns Supabase scan UUID."""
     scan_date = session.get('scan_date')
     row = {
@@ -281,7 +281,7 @@ def upsert_scan(sb: Client, patient_uuid: str, session: dict) -> str:
         'scanner_serial': session.get('scanner_serial') or config.SCANNER_ID,
         'software':       session.get('software') or config.SOFTWARE,
         'xps_filename':   session.get('xps_filename') or session.get('ntx_filename'),
-        'scan_type':      _osteo_scan_type(session),
+        'scan_type':      scan_type or _osteo_scan_type(session),
         'raw_json':       json.dumps(session, default=_ser),
     }
     result = (
@@ -734,7 +734,7 @@ def upload_totalbody_raw(
 
 
 # ── High-level sync ───────────────────────────────────────────────────────
-def sync_scan(patient: dict, session: dict, merged: dict, pdf_bytes: bytes) -> dict:
+def sync_scan(patient: dict, session: dict, merged: dict, pdf_bytes: bytes, scan_type: str = None) -> dict:
     """
     Full sync pipeline:
       1. Upload PDF to Storage
@@ -748,7 +748,7 @@ def sync_scan(patient: dict, session: dict, merged: dict, pdf_bytes: bytes) -> d
 
     pdf_url      = upload_pdf(pid, scan_date, pdf_bytes)
     patient_uuid = upsert_patient(sb, patient)
-    scan_uuid    = upsert_scan(sb, patient_uuid, session)
+    scan_uuid    = upsert_scan(sb, patient_uuid, session, scan_type=scan_type)
     upsert_bmd_results(sb, scan_uuid, merged)
     report_uuid  = upsert_report(sb, scan_uuid, pdf_url)
 
