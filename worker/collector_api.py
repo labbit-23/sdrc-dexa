@@ -477,7 +477,11 @@ def upload(patient_id: str, body: UploadBody):
                 if pat_handles:
                     session = parser.get_latest_session(pat_handles[0])
                     if session:
-                        mdb_scan_type = session.get('mdb_scan_type', 'osteo')
+                        base_type = session.get('mdb_scan_type', 'osteo')
+                        if base_type == 'osteo':
+                            mdb_scan_type = _osteo_scan_type(session)
+                        else:
+                            mdb_scan_type = base_type
                 log.info('upload %s: MDB scan type = %s', patient_id, mdb_scan_type)
                 _cb(f'MDB scan type: {mdb_scan_type}')
 
