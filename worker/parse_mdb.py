@@ -346,7 +346,7 @@ class MdbParser:
             return None
 
         # Use body scan date as session date; fall back to any available
-        primary = body_img or right_img or left_img
+        primary = body_img or right_img or left_img or left_forearm_img or right_forearm_img
         scan_date = primary['_acq_dt']
 
         scanner_serial = primary.get('scanner_id', '').strip() or None
