@@ -337,7 +337,12 @@ class MdbParser:
         right_img = next((e for e in imgs if e['_scantype_int'] == 1 and e['_side_int'] == 2), None)
         left_img  = next((e for e in imgs if e['_scantype_int'] == 2 and e['_side_int'] == 1), None)
 
-        if not any([body_img, right_img, left_img]):
+        # Forearm scans (scantype=12)
+        left_forearm_img = next((e for e in imgs if e['_scantype_int'] == 12 and e['_side_int'] == 1), None)
+        right_forearm_img = next((e for e in imgs if e['_scantype_int'] == 12 and e['_side_int'] == 2), None)
+
+        # Allow osteo (body/femur) or forearm-only sessions
+        if not any([body_img, right_img, left_img, left_forearm_img, right_forearm_img]):
             return None
 
         # Use body scan date as session date; fall back to any available
@@ -352,6 +357,7 @@ class MdbParser:
         #   scantype 10 → total body scan (full-body DXA)
         #   scantype 0 with left+right femur → osteo (AP Spine + Dual Femur)
         #   scantype 0 alone → spine-only osteo
+        #   scantype 12 → forearm-only osteo
         has_tb_scantype = any(e['_scantype_int'] == 10 for e in imgs)
         mdb_scan_type = 'total_body' if has_tb_scantype else 'osteo'
 
@@ -388,12 +394,10 @@ class MdbParser:
             session['right_femur'] = self._extract_femur(right_img['img_handle'])
 
         # Left forearm (scantype=12, side=1)
-        left_forearm_img = next((e for e in imgs if e['_scantype_int'] == 12 and e['_side_int'] == 1), None)
         if left_forearm_img:
             session['left_forearm'] = self._extract_forearm(left_forearm_img['img_handle'])
 
         # Right forearm (scantype=12, side=2)
-        right_forearm_img = next((e for e in imgs if e['_scantype_int'] == 12 and e['_side_int'] == 2), None)
         if right_forearm_img:
             session['right_forearm'] = self._extract_forearm(right_forearm_img['img_handle'])
 
