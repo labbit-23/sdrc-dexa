@@ -252,19 +252,22 @@ def upsert_patient(sb: Client, patient: dict) -> str:
 def _osteo_scan_type(session: dict) -> str:
     """
     Derive specific osteo scan_type from MDB session.
-    Uses the presence of spine / left_femur / right_femur data — all sourced
+    Uses the presence of spine / left_femur / right_femur / forearm data — all sourced
     from the MDB scantype field, never from XPS content.
 
       spine + any femur  → 'spine_femur'
       femur(s) only      → 'dual_femur'
       spine only         → 'spine_only'
+      forearm only       → 'forearm'
       unknown            → 'osteo'  (legacy fallback)
     """
     has_spine = bool(session.get('spine'))
     has_femur = bool(session.get('left_femur')) or bool(session.get('right_femur'))
+    has_forearm = bool(session.get('left_forearm')) or bool(session.get('right_forearm'))
     if has_spine and has_femur:  return 'spine_femur'
     if has_femur:                return 'dual_femur'
     if has_spine:                return 'spine_only'
+    if has_forearm:              return 'forearm'
     return 'osteo'
 
 
