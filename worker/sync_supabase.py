@@ -721,6 +721,8 @@ def upload_totalbody_raw(
 
             r = httpx.post(f"{rest}/bmd_scans?on_conflict=scan_handle", headers=db_headers,
                            content=json.dumps(scan_row), timeout=30)
+            if r.status_code != 201:
+                log.error("bmd_scans POST failed with %s: %s", r.status_code, r.text)
             r.raise_for_status()
             scan_uuid = r.json()[0]['id']
             log.info("Upserted bmd_scans (%s): %s", scan_type, scan_uuid)
