@@ -252,23 +252,19 @@ def upsert_patient(sb: Client, patient: dict) -> str:
 def _osteo_scan_type(session: dict) -> str:
     """
     Derive specific osteo scan_type from MDB session.
-    Uses the presence of spine / femur / forearm data — all sourced
+    Uses the presence of spine / left_femur / right_femur data — all sourced
     from the MDB scantype field, never from XPS content.
 
       spine + any femur  → 'spine_femur'
       femur(s) only      → 'dual_femur'
       spine only         → 'spine_only'
-      forearm only       → 'forearm'
       unknown            → 'osteo'  (legacy fallback)
     """
     has_spine = bool(session.get('spine'))
     has_femur = bool(session.get('left_femur')) or bool(session.get('right_femur'))
-    has_forearm = bool(session.get('left_forearm')) or bool(session.get('right_forearm'))
-
     if has_spine and has_femur:  return 'spine_femur'
     if has_femur:                return 'dual_femur'
     if has_spine:                return 'spine_only'
-    if has_forearm:              return 'forearm'
     return 'osteo'
 
 
@@ -410,8 +406,6 @@ def upload_osteo_raw(
       raw-osteo/{mrn}/{timestamp}/img_spine.png
       raw-osteo/{mrn}/{timestamp}/img_left_femur.png
       raw-osteo/{mrn}/{timestamp}/img_right_femur.png
-      raw-osteo/{mrn}/{timestamp}/img_left_forearm.png
-      raw-osteo/{mrn}/{timestamp}/img_right_forearm.png
       raw-osteo/{mrn}/{timestamp}/{xps_filename}
 
     Returns dict: {storage_prefix, files_uploaded, patient_uuid, scan_uuid}
@@ -439,11 +433,10 @@ def upload_osteo_raw(
     image_paths: dict[str, str] = {}
 
     # Strip-assembled scan images (keyed by label)
-    # Note: forearm images are rendered as overlays only, not extracted raw
     label_to_file = {
-        'spine':        'img_spine.png',
-        'left_femur':   'img_left_femur.png',
-        'right_femur':  'img_right_femur.png',
+        'spine':       'img_spine.png',
+        'left_femur':  'img_left_femur.png',
+        'right_femur': 'img_right_femur.png',
     }
     for label, fname in label_to_file.items():
         if label in (png_images or {}):
@@ -453,11 +446,9 @@ def upload_osteo_raw(
 
     # Overlay pages (mutool-rendered, ROI lines baked in; keyed by filename)
     overlay_files = {
-        'img_spine_overlay.png':        'spine_overlay',
-        'img_left_femur_overlay.png':   'left_femur_overlay',
-        'img_right_femur_overlay.png':  'right_femur_overlay',
-        'img_left_forearm_overlay.png':  'left_forearm_overlay',
-        'img_right_forearm_overlay.png': 'right_forearm_overlay',
+        'img_spine_overlay.png':       'spine_overlay',
+        'img_left_femur_overlay.png':  'left_femur_overlay',
+        'img_right_femur_overlay.png': 'right_femur_overlay',
     }
     for fname, key in overlay_files.items():
         if fname in (png_images or {}):
