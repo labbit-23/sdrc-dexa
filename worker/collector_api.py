@@ -234,7 +234,19 @@ def recent(
         actual_scan_type = sessions[0].get('mdb_scan_type') if sessions else None
         exists    = bool(scan_date_iso and check_scan_exists(pid, scan_date_iso, actual_scan_type))
         components = _derive_scan_components(sessions)
-        out.append({**_jsonify(info), 'scan_type': actual_scan_type, 'exists_in_db': exists, **components})
+        # Include session data (spine, femur, forearm measurements) from the first session
+        session_data = sessions[0] if sessions else {}
+        out.append({
+            **_jsonify(info),
+            'scan_type': actual_scan_type,
+            'exists_in_db': exists,
+            **components,
+            'spine': session_data.get('spine', {}),
+            'left_femur': session_data.get('left_femur', {}),
+            'right_femur': session_data.get('right_femur', {}),
+            'left_forearm': session_data.get('left_forearm', {}),
+            'right_forearm': session_data.get('right_forearm', {}),
+        })
     return out
 
 
