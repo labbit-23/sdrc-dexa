@@ -231,14 +231,32 @@ def recent(
         scan_date_iso = sd.isoformat() if sd else ''
         # Extract scan_type (mdb_scan_type) from sessions on this date
         sessions  = info.get('sessions') or [info.get('session', {})]
-        actual_scan_type = sessions[0].get('mdb_scan_type') if sessions else None
-        exists    = bool(scan_date_iso and check_scan_exists(pid, scan_date_iso, actual_scan_type))
-        components = _derive_scan_components(sessions)
-        # Include session data (spine, femur, forearm measurements) from the first session
         session_data = sessions[0] if sessions else {}
+
+        # Detect specific scan type (spine_femur, dual_femur, spine_only, forearm) from session data
+        base_type = session_data.get('mdb_scan_type', 'osteo')
+        if base_type == 'osteo':
+            has_spine = bool(session_data.get('spine'))
+            has_femur = bool(session_data.get('left_femur')) or bool(session_data.get('right_femur'))
+            has_forearm = bool(session_data.get('left_forearm')) or bool(session_data.get('right_forearm'))
+            if has_spine and has_femur:
+                detected_scan_type = 'spine_femur'
+            elif has_femur:
+                detected_scan_type = 'dual_femur'
+            elif has_spine:
+                detected_scan_type = 'spine_only'
+            elif has_forearm:
+                detected_scan_type = 'forearm'
+            else:
+                detected_scan_type = 'osteo'
+        else:
+            detected_scan_type = base_type
+
+        exists    = bool(scan_date_iso and check_scan_exists(pid, scan_date_iso, detected_scan_type))
+        components = _derive_scan_components(sessions)
         out.append({
             **_jsonify(info),
-            'scan_type': actual_scan_type,
+            'scan_type': detected_scan_type,
             'exists_in_db': exists,
             **components,
             'spine': session_data.get('spine', {}),
