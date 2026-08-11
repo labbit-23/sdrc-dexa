@@ -1,8 +1,12 @@
 import { createClient } from '@supabase/supabase-js'
 
+// 2026-08-11: request timeout so a slow/stuck DB response fails fast
+// instead of hanging the request handler forever (see labit-main's
+// lib/supabaseServer.js for the incident this traces back to).
 export const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+  { global: { fetch: (url, options = {}) => fetch(url, { ...options, signal: AbortSignal.timeout(15000) }) } },
 )
 
 // ── Types matching the DB schema ─────────────────────────────────────────
