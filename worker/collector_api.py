@@ -537,11 +537,12 @@ def upload(patient_id: str, body: UploadBody):
                 for p in xps:
                     label = _classify_xps(p)
                     if label == 'combined':
-                        xps_map = {'spine': p, 'left_femur': p, 'right_femur': p}
-                        break
+                        xps_map['spine'] = p
+                        xps_map['left_femur'] = p
+                        xps_map['right_femur'] = p
                     elif label == 'dual_femur':
-                        xps_map = {'left_femur': p, 'right_femur': p}
-                        break
+                        xps_map['left_femur'] = p
+                        xps_map['right_femur'] = p
                     elif label in ('spine', 'left_femur', 'right_femur', 'left_forearm', 'right_forearm'):
                         xps_map[label] = p
                 result = upload_osteo_scan(patient_id, xps_map, progress_cb=_cb, scan_date=body.scan_date, scan_type=mdb_scan_type)
