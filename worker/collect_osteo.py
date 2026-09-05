@@ -363,13 +363,21 @@ _OSTEO_REGION_FIELDS = (
     'estimated_composition',
 )
 
-_REGION_IMAGE_FILES = {
-    'spine':        'img_spine.png',
-    'left_femur':   'img_left_femur.png',
-    'right_femur':  'img_right_femur.png',
-    'left_forearm': 'img_left_forearm.png',
-    'right_forearm': 'img_right_forearm.png',
+_REGION_IMAGE_LABELS = ('spine', 'left_femur', 'right_femur', 'left_forearm', 'right_forearm')
+
+_OVERLAY_FILENAMES = {
+    'spine':         'img_spine_overlay.png',
+    'left_femur':    'img_left_femur_overlay.png',
+    'right_femur':   'img_right_femur_overlay.png',
+    'left_forearm':  'img_left_forearm_overlay.png',
+    'right_forearm': 'img_right_forearm_overlay.png',
 }
+
+# osteo-html-template.js renders spine/femur as `overlay_url || base_url`, with an
+# onerror fallback chain between the two — either image alone is enough. The forearm
+# section only ever renders `left/right_forearm_overlay_url` with no fallback, so for
+# those the overlay specifically must exist or the report ships a permanently broken img.
+_OVERLAY_REQUIRED_LABELS = ('left_forearm', 'right_forearm')
 
 
 def _merge_osteo_sessions(sessions: list[dict]) -> dict:
@@ -601,8 +609,15 @@ def upload_osteo_scan(mrn: str,
     # with no image to back them are worse than no section at all, so drop
     # that region's data — whichever region it is — rather than shipping a
     # report with a broken image.
-    for field, fname in _REGION_IMAGE_FILES.items():
-        if raw_data['session'].get(field) and fname not in images:
+    for field in _REGION_IMAGE_LABELS:
+        if not raw_data['session'].get(field):
+            continue
+        overlay_fname = _OVERLAY_FILENAMES[field]
+        has_image = (
+            overlay_fname in images if field in _OVERLAY_REQUIRED_LABELS
+            else (field in images or overlay_fname in images)
+        )
+        if not has_image:
             notify(f"  Warning: {field} has MDB data but no image for this upload — omitting from report.")
             log.warning("upload_osteo_scan(%s): omitting %s — MDB data present but no image extracted", mrn, field)
             raw_data['session'][field] = {}
