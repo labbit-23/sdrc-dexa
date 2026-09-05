@@ -166,6 +166,7 @@ def detect_osteo_xps(
 
     combined_no_images: Optional[str] = None
     per_scan: dict[str, str] = {}
+    result: Optional[dict[str, str]] = None
 
     # ── Pass 1: prefer combined XPS with embedded images (always wins) ────────
     for xps_path in candidates:
@@ -175,48 +176,97 @@ def detect_osteo_xps(
         if label == 'dual_femur':
             if _has_scan_images(abs_path):
                 log.info("  %s → dual_femur + images  (modified %s)", xps_path.name, mtime_str)
-                return {'left_femur': abs_path, 'right_femur': abs_path}
+                result = {'left_femur': abs_path, 'right_femur': abs_path}
+                break
             elif combined_no_images is None:
                 log.info("  %s → dual_femur (text only)  (modified %s)", xps_path.name, mtime_str)
                 combined_no_images = abs_path
         elif label == 'combined':
             if _has_scan_images(abs_path):
                 log.info("  %s → combined + images  (modified %s)", xps_path.name, mtime_str)
-                return {'spine': abs_path, 'left_femur': abs_path, 'right_femur': abs_path}
+                result = {'spine': abs_path, 'left_femur': abs_path, 'right_femur': abs_path}
+                break
             elif combined_no_images is None:
                 log.info("  %s → combined (text only)  (modified %s)", xps_path.name, mtime_str)
                 combined_no_images = abs_path
 
     # ── Pass 2: per-scan individual files ────────────────────────────────────
     # Prefer image-bearing XPS over text-only for each label slot.
-    per_scan_has_imgs: dict[str, bool] = {}
-    for xps_path in candidates:
-        label = _classify_xps(str(xps_path))
-        abs_path = str(xps_path.resolve())
-        mtime_str = datetime.fromtimestamp(xps_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M')
-        if label not in XPS_LABELS:
-            continue
-        has_imgs = _has_scan_images(abs_path)
-        if label not in per_scan:
-            per_scan[label] = abs_path
-            per_scan_has_imgs[label] = has_imgs
-            log.info("  %s → %s%s  (modified %s)", xps_path.name, label,
-                     " [+images]" if has_imgs else "", mtime_str)
-        elif has_imgs and not per_scan_has_imgs.get(label):
-            # Upgrade: existing slot is text-only; this one has images — prefer it
-            log.info("  %s → %s [upgraded, has images]  (modified %s)", xps_path.name, label, mtime_str)
-            per_scan[label] = abs_path
-            per_scan_has_imgs[label] = True
+    if result is None:
+        per_scan_has_imgs: dict[str, bool] = {}
+        for xps_path in candidates:
+            label = _classify_xps(str(xps_path))
+            abs_path = str(xps_path.resolve())
+            mtime_str = datetime.fromtimestamp(xps_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M')
+            if label not in XPS_LABELS:
+                continue
+            has_imgs = _has_scan_images(abs_path)
+            if label not in per_scan:
+                per_scan[label] = abs_path
+                per_scan_has_imgs[label] = has_imgs
+                log.info("  %s → %s%s  (modified %s)", xps_path.name, label,
+                         " [+images]" if has_imgs else "", mtime_str)
+            elif has_imgs and not per_scan_has_imgs.get(label):
+                # Upgrade: existing slot is text-only; this one has images — prefer it
+                log.info("  %s → %s [upgraded, has images]  (modified %s)", xps_path.name, label, mtime_str)
+                per_scan[label] = abs_path
+                per_scan_has_imgs[label] = True
 
-    if per_scan:
-        return per_scan
+        if per_scan:
+            result = per_scan
 
     # ── Pass 3: text-only combined (no images, but has BMD data) ─────────────
-    if combined_no_images:
+    if result is None and combined_no_images:
         log.warning("Only text-only combined XPS found — no scan images will be extracted")
-        return {'spine': combined_no_images, 'left_femur': combined_no_images, 'right_femur': combined_no_images}
+        result = {'spine': combined_no_images, 'left_femur': combined_no_images, 'right_femur': combined_no_images}
 
-    return {}
+    if result is None:
+        return {}
+
+    # ── Forearm merge — only when a specific visit date is known ─────────────
+    # A forearm export commonly gets saved as its own file (e.g. "13677-1.xps")
+    # rather than baked into the combined spine+femur XPS, so it would
+    # otherwise never be found by the passes above. Only attach one when we
+    # know exactly which day we're building for (scan_date given) and the
+    # forearm file's own mtime falls on that *exact* calendar day — never from
+    # the widened 7-day fallback used for `candidates` above, since that could
+    # silently attach an unrelated older wrist scan for the same MRN.
+    if scan_date:
+        target_date = scan_date.date() if isinstance(scan_date, datetime) else scan_date
+        forearm = _find_forearm_xps(all_xps, target_date)
+        if forearm:
+            result.update(forearm)
+
+    return result
+
+
+def _find_forearm_xps(mrn_xps: list[Path], target_date) -> dict[str, str]:
+    """
+    Among MRN-matched XPS files, return forearm-classified file(s) whose mtime
+    falls on target_date exactly. Prefers an image-bearing file over a
+    text-only one for each side.
+    """
+    from parse_xps import _has_scan_images
+
+    forearm: dict[str, str] = {}
+    forearm_has_imgs: dict[str, bool] = {}
+    for xps_path in mrn_xps:
+        if datetime.fromtimestamp(xps_path.stat().st_mtime).date() != target_date:
+            continue
+        label = _classify_xps(str(xps_path))
+        if label not in ('left_forearm', 'right_forearm'):
+            continue
+        abs_path = str(xps_path.resolve())
+        has_imgs = _has_scan_images(abs_path)
+        if label not in forearm:
+            forearm[label] = abs_path
+            forearm_has_imgs[label] = has_imgs
+            log.info("  %s → %s%s (same-day forearm)", xps_path.name, label, " [+images]" if has_imgs else "")
+        elif has_imgs and not forearm_has_imgs.get(label):
+            forearm[label] = abs_path
+            forearm_has_imgs[label] = True
+            log.info("  %s → %s [upgraded, has images] (same-day forearm)", xps_path.name, label)
+    return forearm
 
 
 def xps_status(
@@ -242,7 +292,10 @@ def xps_status(
     # a spine scan (no hip order), so we must not block on missing femur files.
     ready   = len(found) > 0
 
-    human = {'spine': 'Spine', 'left_femur': 'Left Femur', 'right_femur': 'Right Femur'}
+    human = {
+        'spine': 'Spine', 'left_femur': 'Left Femur', 'right_femur': 'Right Femur',
+        'left_forearm': 'Left Forearm', 'right_forearm': 'Right Forearm',
+    }
     if not found:
         msg = (
             "No XPS files found for this patient.\n\n"
@@ -305,17 +358,74 @@ def get_sessions_for_mrn(mrn: str) -> list[dict]:
     return list_patient_sessions(config.MDB_PATH, mrn)
 
 
+_OSTEO_REGION_FIELDS = (
+    'spine', 'left_femur', 'right_femur', 'left_forearm', 'right_forearm',
+    'estimated_composition',
+)
+
+_REGION_IMAGE_FILES = {
+    'spine':        'img_spine.png',
+    'left_femur':   'img_left_femur.png',
+    'right_femur':  'img_right_femur.png',
+    'left_forearm': 'img_left_forearm.png',
+    'right_forearm': 'img_right_forearm.png',
+}
+
+
+def _merge_osteo_sessions(sessions: list[dict]) -> dict:
+    """
+    Merge multiple same-day MDB sessions (distinct scan_handles) for one
+    patient into a single session dict.
+
+    GE Lunar assigns a fresh scan_handle per console sitting, so a patient
+    who has spine+hip done and then, later the same day, comes back for a
+    forearm scan (a separate order, a repeat, an add-on) ends up with two
+    scan_handles dated the same day — neither is "the" session on its own,
+    both are real data for that day and belong in the same report.
+
+    For each region field, take the first non-empty value found among the
+    sessions (chronological order); a session with an empty {} for a field
+    contributes nothing for that field and is simply skipped for it.
+    """
+    sessions = sorted(sessions, key=lambda s: s.get('scan_date') or datetime.min)
+    primary = next((s for s in sessions if s.get('spine')), sessions[0])
+
+    merged = {
+        'scan_date':      primary.get('scan_date', ''),
+        'scanner_serial': primary.get('scanner_serial') or config.SCANNER_ID,
+        'software':       primary.get('software') or config.SOFTWARE,
+        'ntx_filename':   primary.get('ntx_filename'),
+    }
+    for field in _OSTEO_REGION_FIELDS:
+        merged[field] = {}
+        for s in sessions:
+            if s.get(field):
+                merged[field] = s[field]
+                break
+
+    return merged
+
+
 def build_raw_osteo_json(mrn: str, scan_index: int = 0, scan_date: str = None, mdb_path: str = '') -> dict:
     """
-    Load the patient + OSTEO (spine/hip) session from MDB.
+    Load the patient + OSTEO (spine/hip/forearm) data from MDB for one day.
 
     Scoped strictly to osteo sessions (mdb_scan_type='osteo') across ALL
     pat_handles for this MRN.  Combined-scan patients (who also have a
     total-body scan) are handled correctly — total-body sessions are
     excluded so their composition data never bleeds into the osteo raw_json.
 
-    If scan_date is provided (ISO format YYYY-MM-DD or full ISO), selects that specific date.
-    Otherwise uses scan_index (default 0 = most recent).
+    A patient can have more than one MDB scan_handle dated the same day
+    (e.g. spine+hip done at check-in, forearm added later the same visit,
+    or a genuinely separate same-day order) — every osteo session matching
+    the target day is gathered and merged field-by-field (see
+    _merge_osteo_sessions), so no region silently disappears just because
+    it lives under a different scan_handle than the others.
+
+    If scan_date is provided (ISO format YYYY-MM-DD or full ISO), selects that day.
+    Otherwise uses the most recent day that has any osteo session.
+    (scan_index is accepted for API compatibility but no longer used — day-level
+    merging replaced the old "one scan_handle = one session" selection.)
 
     Pass mdb_path to read from an alternative MDB (e.g. archive).
 
@@ -348,80 +458,17 @@ def build_raw_osteo_json(mrn: str, scan_index: int = 0, scan_date: str = None, m
         key=lambda x: x[1].get('scan_date') or datetime.min, reverse=True
     )
 
-    # If scan_date is specified, find the matching session
-    if scan_date:
-        target_date_str = scan_date[:10]  # Extract YYYY-MM-DD
-        for pat, sess in pat_sessions:
-            sess_date_str = str(sess.get('scan_date', ''))[:10]
-            if sess_date_str == target_date_str:
-                # Build structured dict like the normal return
-                return {
-                    'patient': {
-                        'pat_handle':  pat['pat_handle'],
-                        'patient_id':  pat['patient_id'],
-                        'mrn':         mrn,
-                        'name':        pat.get('name', ''),
-                        'title':       pat.get('title', ''),
-                        'dob':         pat['dob'].isoformat() if pat.get('dob') else '',
-                        'gender':      pat.get('gender', 'Female'),
-                        'ethnicity':   pat.get('ethnicity', ''),
-                        'height_cm':   pat.get('height_cm') or 0,
-                        'weight_kg':   pat.get('weight_kg') or 0,
-                        'bmi':         pat.get('bmi') or 0,
-                        'physician':   pat.get('physician', ''),
-                    },
-                    'session': {
-                        'scan_date':      sess.get('scan_date', ''),
-                        'scanner_serial': sess.get('scanner_serial') or config.SCANNER_ID,
-                        'software':       sess.get('software') or config.SOFTWARE,
-                        'ntx_filename':   sess.get('ntx_filename'),
-                        'spine':                 sess.get('spine', {}),
-                        'left_femur':            sess.get('left_femur', {}),
-                        'right_femur':           sess.get('right_femur', {}),
-                        'left_forearm':          sess.get('left_forearm', {}),
-                        'right_forearm':         sess.get('right_forearm', {}),
-                        'estimated_composition': sess.get('estimated_composition', {}),
-                    }
-                }
+    target_date_str = scan_date[:10] if scan_date else str(pat_sessions[0][1].get('scan_date', ''))[:10]
+
+    matching = [(p, s) for p, s in pat_sessions if str(s.get('scan_date', ''))[:10] == target_date_str]
+    if not matching:
         raise RuntimeError(
             f"No osteo scan found for MRN '{mrn}' on date {target_date_str}.\n"
             f"Available dates: {', '.join(str(s[1].get('scan_date', ''))[:10] for s in pat_sessions)}"
         )
 
-    if not pat_sessions:
-        raise RuntimeError(f"Patient MRN '{mrn}' has no osteo sessions in MDB.")
-
-    # If scan_date specified, find THAT exact date; otherwise find most recent complete
-    selected_session = None
-
-    if scan_date:
-        # Find the session matching the specified date
-        target_date_str = str(scan_date)[:10]  # YYYY-MM-DD
-        for p, s in pat_sessions:
-            sess_date_str = str(s.get('scan_date', ''))[:10]
-            if sess_date_str == target_date_str:
-                selected_session = (p, s)
-                break
-
-        if not selected_session:
-            raise RuntimeError(
-                f"Patient MRN '{mrn}' has no osteo scan on {target_date_str}. "
-                f"Please select another archive study to link."
-            )
-    else:
-        # Find most recent complete session
-        for p, s in pat_sessions:
-            if s.get('spine') and s.get('left_femur') and s.get('right_femur'):
-                selected_session = (p, s)
-                break
-
-        if not selected_session:
-            raise RuntimeError(
-                f"Patient MRN '{mrn}' has no osteo session with complete spine + femur data. "
-                f"Archive may have incomplete scans."
-            )
-
-    pat, sess = selected_session
+    pat = matching[0][0]
+    merged_session = _merge_osteo_sessions([s for _, s in matching])
 
     return {
         'patient': {
@@ -438,18 +485,7 @@ def build_raw_osteo_json(mrn: str, scan_index: int = 0, scan_date: str = None, m
             'bmi':         pat.get('bmi') or 0,
             'physician':   pat.get('physician', ''),
         },
-        'session': {
-            'scan_date':      sess.get('scan_date', ''),
-            'scanner_serial': sess.get('scanner_serial') or config.SCANNER_ID,
-            'software':       sess.get('software') or config.SOFTWARE,
-            'ntx_filename':   sess.get('ntx_filename'),
-            'spine':                 sess.get('spine', {}),
-            'left_femur':            sess.get('left_femur', {}),
-            'right_femur':           sess.get('right_femur', {}),
-            'left_forearm':          sess.get('left_forearm', {}),
-            'right_forearm':         sess.get('right_forearm', {}),
-            'estimated_composition': sess.get('estimated_composition', {}),
-        },
+        'session': merged_session,
     }
 
 
@@ -554,11 +590,24 @@ def upload_osteo_scan(mrn: str,
     # 1. MDB data
     notify(f"Reading MDB for MRN {mrn}…")
     raw_data = build_raw_osteo_json(mrn, scan_index=scan_index, scan_date=scan_date)
-    raw_json_bytes = json.dumps(raw_data, indent=2, default=_serial).encode()
 
     # 2. Images
     notify("Extracting scan images from XPS…")
     images = extract_images(xps_map, notify=notify)
+
+    # 2b. A region can have MDB densitometry rows without this upload having
+    # an image for it (e.g. its scan_handle's XPS was never exported/synced —
+    # see the merge in build_raw_osteo_json/_merge_osteo_sessions). Numbers
+    # with no image to back them are worse than no section at all, so drop
+    # that region's data — whichever region it is — rather than shipping a
+    # report with a broken image.
+    for field, fname in _REGION_IMAGE_FILES.items():
+        if raw_data['session'].get(field) and fname not in images:
+            notify(f"  Warning: {field} has MDB data but no image for this upload — omitting from report.")
+            log.warning("upload_osteo_scan(%s): omitting %s — MDB data present but no image extracted", mrn, field)
+            raw_data['session'][field] = {}
+
+    raw_json_bytes = json.dumps(raw_data, indent=2, default=_serial).encode()
 
     # 3. Raw XPS bytes (for reprocessing)
     xps_bytes: dict[str, bytes] = {}
