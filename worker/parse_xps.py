@@ -466,7 +466,10 @@ def _parse_region_bounds_by_position(
     Region names are inferred from "Densitometry Reference:" XAML text near
     each zone — no hardcoded strip numbers, no OCR.
 
-    Returns {region_name: (x1, y1, x2, y2)} for each detected region.
+    Returns {region_name: (page_index, (x1, y1, x2, y2))} for each detected
+    region — page_index (0-based) tells the caller which rendered page to
+    crop the bounds from, since a combined XPS's regions can span more than
+    one page (e.g. spine/hips on page 1, forearm added on page 2).
 
     Each page is detected and named independently, then merged — never pool
     strips/text across pages before naming zones (see
@@ -477,7 +480,7 @@ def _parse_region_bounds_by_position(
         log.warning("_parse_region_bounds_by_position: no valid strips in %s", xps_path)
         return {}
 
-    result: dict[str, tuple[float, float, float, float]] = {}
+    result: dict[str, tuple[int, tuple[float, float, float, float]]] = {}
     for page_idx, (fpage, strip_boxes) in enumerate(pages):
         if not strip_boxes:
             continue
@@ -500,7 +503,7 @@ def _parse_region_bounds_by_position(
             if name in result:
                 log.warning("_parse_region_bounds_by_position: region %r found on multiple pages in %s — keeping first", name, xps_path)
                 continue
-            result[name] = box
+            result[name] = (page_idx, box)
 
     return result
 
@@ -1410,7 +1413,11 @@ def render_osteo_overlay_pages(
             region_bounds = _parse_region_bounds_by_position(left_femur_xps)
             for region, key in [('left_femur', 'left_femur_overlay'), ('right_femur', 'right_femur_overlay')]:
                 if region in region_bounds:
-                    result = _render_region(pages[0], region_bounds[region], key)
+                    page_idx, bounds = region_bounds[region]
+                    if page_idx >= len(pages):
+                        log.warning("render_osteo_overlay_pages: %s bounds reference page %d but only %d rendered", region, page_idx, len(pages))
+                        continue
+                    result = _render_region(pages[page_idx], bounds, key)
                     if result:
                         out[key] = result
                 else:
@@ -1419,18 +1426,28 @@ def render_osteo_overlay_pages(
     elif all_three_same:
         pages = render_xps_pages(spine_xps, dpi=dpi)
         if pages:
-            page_png = pages[0]
             region_bounds = _parse_region_bounds_by_position(spine_xps)
+            # Forearm is included here (not just spine/left_femur/right_femur):
+            # this site's combined XPS can carry a forearm page alongside
+            # spine+hips in the very same file, and region_bounds already
+            # covers however many pages/regions the file actually has —
+            # whatever's present should be extracted, not just the textbook 3.
             for region, key in [
-                ('spine',       'spine_overlay'),
-                ('left_femur',  'left_femur_overlay'),
-                ('right_femur', 'right_femur_overlay'),
+                ('spine',        'spine_overlay'),
+                ('left_femur',   'left_femur_overlay'),
+                ('right_femur',  'right_femur_overlay'),
+                ('left_forearm', 'left_forearm_overlay'),
+                ('right_forearm', 'right_forearm_overlay'),
             ]:
                 if region in region_bounds:
-                    result = _render_region(page_png, region_bounds[region], key)
+                    page_idx, bounds = region_bounds[region]
+                    if page_idx >= len(pages):
+                        log.warning("render_osteo_overlay_pages: %s bounds reference page %d but only %d rendered", region, page_idx, len(pages))
+                        continue
+                    result = _render_region(pages[page_idx], bounds, key)
                     if result:
                         out[key] = result
-                else:
+                elif region in ('spine', 'left_femur', 'right_femur'):
                     log.warning("render_osteo_overlay_pages: no strip bounds for %s", region)
 
     # Separate XPS files — each has its own single page. Also catches a forearm
@@ -1463,7 +1480,11 @@ def render_osteo_overlay_pages(
         if target_region not in region_bounds:
             log.warning("render_osteo_overlay_pages: no bounds for %s in %s", target_region, path)
             continue
-        result = _render_region(pages[0], region_bounds[target_region], label)
+        page_idx, bounds = region_bounds[target_region]
+        if page_idx >= len(pages):
+            log.warning("render_osteo_overlay_pages: %s bounds reference page %d but only %d rendered in %s", target_region, page_idx, len(pages), path)
+            continue
+        result = _render_region(pages[page_idx], bounds, label)
         if result:
             out[label] = result
 
