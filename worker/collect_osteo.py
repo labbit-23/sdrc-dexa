@@ -373,12 +373,6 @@ _OVERLAY_FILENAMES = {
     'right_forearm': 'img_right_forearm_overlay.png',
 }
 
-# osteo-html-template.js renders spine/femur as `overlay_url || base_url`, with an
-# onerror fallback chain between the two — either image alone is enough. The forearm
-# section only ever renders `left/right_forearm_overlay_url` with no fallback, so for
-# those the overlay specifically must exist or the report ships a permanently broken img.
-_OVERLAY_REQUIRED_LABELS = ('left_forearm', 'right_forearm')
-
 
 def _merge_osteo_sessions(sessions: list[dict]) -> dict:
     """
@@ -606,17 +600,18 @@ def upload_osteo_scan(mrn: str,
     # 2b. A region can have MDB densitometry rows without this upload having
     # an image for it (e.g. its scan_handle's XPS was never exported/synced —
     # see the merge in build_raw_osteo_json/_merge_osteo_sessions). Numbers
-    # with no image to back them are worse than no section at all, so drop
-    # that region's data — whichever region it is — rather than shipping a
-    # report with a broken image.
+    # with no image to back them at all are worse than no section at all, so
+    # drop that region's data — whichever region it is — rather than shipping
+    # a report with a broken image. The plain (non-overlay) image counts here
+    # for every region, including forearm — osteo-html-template.js falls back
+    # to it (overlay_url || base_url, with onerror) when the overlay itself
+    # isn't available, so the T-score/BMD numbers aren't lost just because the
+    # ROI-box rendering step failed.
     for field in _REGION_IMAGE_LABELS:
         if not raw_data['session'].get(field):
             continue
         overlay_fname = _OVERLAY_FILENAMES[field]
-        has_image = (
-            overlay_fname in images if field in _OVERLAY_REQUIRED_LABELS
-            else (field in images or overlay_fname in images)
-        )
+        has_image = field in images or overlay_fname in images
         if not has_image:
             notify(f"  Warning: {field} has MDB data but no image for this upload — omitting from report.")
             log.warning("upload_osteo_scan(%s): omitting %s — MDB data present but no image extracted", mrn, field)
