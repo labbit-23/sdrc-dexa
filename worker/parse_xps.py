@@ -236,21 +236,27 @@ _GLYPH_RE = re.compile(
 )
 
 
-def _collect_strip_viewports(xps_path: str) -> tuple[str, list[tuple[int, float, float, float, float]]]:
+def _collect_strip_viewports_per_page(xps_path: str) -> list[tuple[str, list[tuple[int, float, float, float, float]]]]:
     """
     Open the XPS ZIP, identify valid scan strips (non-RGBA, h≥20, w≥100),
-    parse their Viewport positions from all fpage XMLs, and return
-    (combined_fpages_text, [(strip_num, x, y, x2, y2), ...]).
+    parse their Viewport positions, and return one (fpage_text, strip_boxes)
+    entry per page: [(page1_fpage, [(strip_num, x, y, x2, y2), ...]), (page2_fpage, [...]), ...]
 
-    Strips that appear at identical positions (same num+x+y) are deduplicated —
-    GE Lunar reuses strip 1 as a header row in both hip columns.
+    Kept per-page (not flattened) because each XPS page has its own
+    independent Y-coordinate origin — a page 1 zone and a page 2 zone can
+    have overlapping Y-ranges despite being unrelated. Flattening all pages
+    into one Y-space let a page 2 region's "Densitometry Reference:" text
+    get matched against a page 1 zone (e.g. a page-2 forearm label bleeding
+    onto a page-1 femur zone), silently mislabeling it. Callers must run
+    zone detection separately per page and merge the resulting named zones
+    — never merge raw strip/glyph data across pages before naming.
 
-    Reads from all pages in case of multi-page reports (e.g., page 1: spine/femur,
-    page 2: forearm).
+    Strips that appear at identical positions within the same page (same
+    num+x+y) are deduplicated — GE Lunar reuses strip 1 as a header row in
+    both hip columns of a side-by-side page.
     """
     try:
         with zipfile.ZipFile(xps_path) as z:
-            # Read all pages (not just page 1)
             fpage_texts = []
             for name in sorted(z.namelist()):
                 if '/Pages/' in name and name.endswith('.fpage'):
@@ -260,9 +266,7 @@ def _collect_strip_viewports(xps_path: str) -> tuple[str, list[tuple[int, float,
                         pass
 
             if not fpage_texts:
-                return '', []
-
-            fpage = '\n'.join(fpage_texts)  # Combine all pages
+                return []
 
             valid: set[int] = set()
             for name in z.namelist():
@@ -276,26 +280,30 @@ def _collect_strip_viewports(xps_path: str) -> tuple[str, list[tuple[int, float,
                 except Exception:
                     pass
     except Exception:
-        return '', []
+        return []
 
-    seen: set[tuple] = set()
-    boxes: list[tuple[int, float, float, float, float]] = []
-    for m in _STRIP_VP_RE.finditer(fpage):
-        if m.group(1):
-            num = int(m.group(1))
-            x, y, w, h = float(m.group(2)), float(m.group(3)), float(m.group(4)), float(m.group(5))
-        else:
-            num = int(m.group(9))
-            x, y, w, h = float(m.group(5)), float(m.group(6)), float(m.group(7)), float(m.group(8))
-        if num not in valid or w < 5 or h < 2:
-            continue
-        key = (num, round(x, 1), round(y, 1))
-        if key in seen:
-            continue
-        seen.add(key)
-        boxes.append((num, x, y, x + w, y + h))
+    pages: list[tuple[str, list[tuple[int, float, float, float, float]]]] = []
+    for fpage in fpage_texts:
+        seen: set[tuple] = set()
+        boxes: list[tuple[int, float, float, float, float]] = []
+        for m in _STRIP_VP_RE.finditer(fpage):
+            if m.group(1):
+                num = int(m.group(1))
+                x, y, w, h = float(m.group(2)), float(m.group(3)), float(m.group(4)), float(m.group(5))
+            else:
+                num = int(m.group(9))
+                x, y, w, h = float(m.group(5)), float(m.group(6)), float(m.group(7)), float(m.group(8))
+            if num not in valid or w < 5 or h < 2:
+                continue
+            key = (num, round(x, 1), round(y, 1))
+            if key in seen:
+                continue
+            seen.add(key)
+            boxes.append((num, x, y, x + w, y + h))
+        pages.append((fpage, boxes))
 
-    return fpage, boxes
+    return pages
+
 
 
 def _disclaimer_ys(fpage: str) -> list[float]:
@@ -459,25 +467,42 @@ def _parse_region_bounds_by_position(
     each zone — no hardcoded strip numbers, no OCR.
 
     Returns {region_name: (x1, y1, x2, y2)} for each detected region.
+
+    Each page is detected and named independently, then merged — never pool
+    strips/text across pages before naming zones (see
+    _collect_strip_viewports_per_page for why).
     """
-    fpage, strip_boxes = _collect_strip_viewports(xps_path)
-    if not strip_boxes:
+    pages = _collect_strip_viewports_per_page(xps_path)
+    if not pages:
         log.warning("_parse_region_bounds_by_position: no valid strips in %s", xps_path)
         return {}
 
-    disc_ys = _disclaimer_ys(fpage)
-    log.info("_parse_region_bounds_by_position: %d strips, %d disclaimers Y=%s in %s",
-             len(strip_boxes), len(disc_ys), disc_ys, Path(xps_path).name)
+    result: dict[str, tuple[float, float, float, float]] = {}
+    for page_idx, (fpage, strip_boxes) in enumerate(pages):
+        if not strip_boxes:
+            continue
 
-    # ── Layout detection ──────────────────────────────────────────────────────
-    x_clusters = _x_gap_clusters([b[1] for b in strip_boxes], gap=50.0)
+        disc_ys = _disclaimer_ys(fpage)
+        log.info("_parse_region_bounds_by_position: page %d — %d strips, %d disclaimers Y=%s in %s",
+                 page_idx + 1, len(strip_boxes), len(disc_ys), disc_ys, Path(xps_path).name)
 
-    if len(x_clusters) >= 2:
-        # Side-by-side: multiple X columns — name each column from text below it
-        return _region_bounds_sidebyside(strip_boxes, x_clusters, disc_ys, fpage)
-    else:
-        # Stacked: single X column, split by disclaimer Y zones
-        return _region_bounds_stacked(strip_boxes, disc_ys, fpage)
+        # ── Layout detection (per page) ──────────────────────────────────────
+        x_clusters = _x_gap_clusters([b[1] for b in strip_boxes], gap=50.0)
+
+        if len(x_clusters) >= 2:
+            # Side-by-side: multiple X columns — name each column from text below it
+            page_result = _region_bounds_sidebyside(strip_boxes, x_clusters, disc_ys, fpage)
+        else:
+            # Stacked: single X column, split by disclaimer Y zones
+            page_result = _region_bounds_stacked(strip_boxes, disc_ys, fpage)
+
+        for name, box in page_result.items():
+            if name in result:
+                log.warning("_parse_region_bounds_by_position: region %r found on multiple pages in %s — keeping first", name, xps_path)
+                continue
+            result[name] = box
+
+    return result
 
 
 def _region_bounds_sidebyside(
@@ -545,9 +570,12 @@ def _region_bounds_stacked(
     for zi, zone in enumerate(zones):
         zone_y_top    = min(b[2] for b in zone)
         zone_y_bottom = max(b[4] for b in zone)
-        # "Densitometry Reference:" label appears in the gap BEFORE each zone
+        # "Densitometry Reference:" label appears in the gap BEFORE each zone —
+        # but on some single-zone pages it sits essentially flush with (a few
+        # units past) the zone's own strip top rather than safely above it, so
+        # extend the search a little past zone_y_top to still catch it.
         prev_bottom = max(b[4] for b in zones[zi - 1]) if zi > 0 else 0.0
-        name = _zone_region_name(glyphs, prev_bottom, zone_y_top, used)
+        name = _zone_region_name(glyphs, prev_bottom, zone_y_top + 20, used)
         used.add(name)
 
         box = _make_region_box(zone, disc_ys)
@@ -979,19 +1007,34 @@ def extract_scan_images(xps_path: str) -> dict[str, Image.Image]:
     Uses position-based region detection (_parse_region_bounds_by_position) to
     group strips by scan region — not hardcoded strip-number ranges.  Handles
     both stacked (spine/L-hip/R-hip) and side-by-side (L-hip | R-hip) layouts.
+
+    Each page is detected and named independently, then merged — never pool
+    strips/text across pages before naming zones (see
+    _collect_strip_viewports_per_page for why).
     """
-    fpage, strip_boxes = _collect_strip_viewports(xps_path)
-    if not strip_boxes:
+    pages = _collect_strip_viewports_per_page(xps_path)
+    if not pages:
         log.warning("extract_scan_images: no valid strips in %s", xps_path)
         return {}
 
-    disc_ys = _disclaimer_ys(fpage)
-    x_clusters = _x_gap_clusters([b[1] for b in strip_boxes], gap=50.0)
+    region_strip_nums: dict[str, list[tuple[int, float]]] = {}
+    for fpage, strip_boxes in pages:
+        if not strip_boxes:
+            continue
 
-    if len(x_clusters) >= 2:
-        region_strip_nums = _strip_nums_sidebyside(strip_boxes, x_clusters, fpage)
-    else:
-        region_strip_nums = _strip_nums_stacked(strip_boxes, disc_ys, fpage)
+        disc_ys = _disclaimer_ys(fpage)
+        x_clusters = _x_gap_clusters([b[1] for b in strip_boxes], gap=50.0)
+
+        if len(x_clusters) >= 2:
+            page_result = _strip_nums_sidebyside(strip_boxes, x_clusters, fpage)
+        else:
+            page_result = _strip_nums_stacked(strip_boxes, disc_ys, fpage)
+
+        for name, strips in page_result.items():
+            if name in region_strip_nums:
+                log.warning("extract_scan_images: region %r found on multiple pages in %s — keeping first", name, xps_path)
+                continue
+            region_strip_nums[name] = strips
 
     results: dict[str, Image.Image] = {}
     try:
@@ -1077,9 +1120,11 @@ def _strip_nums_stacked(
         zone_y_top    = min(b[2] for b in zone)
         zone_y_bottom = max(b[4] for b in zone)
         # "Densitometry Reference:" label appears in the gap BEFORE each zone, not within it.
-        # Search from the previous zone's bottom (or 0 for zone 0) up to this zone's top.
+        # Search from the previous zone's bottom (or 0 for zone 0) up to a bit past this
+        # zone's top — on some single-zone pages the label sits flush with the strip top
+        # rather than safely above it.
         prev_bottom = max(b[4] for b in zones[zi - 1]) if zi > 0 else 0.0
-        name = _zone_region_name(glyphs, prev_bottom, zone_y_top, used)
+        name = _zone_region_name(glyphs, prev_bottom, zone_y_top + 20, used)
         used.add(name)
         result[name] = _dedup_strips_by_num(zone)
 
