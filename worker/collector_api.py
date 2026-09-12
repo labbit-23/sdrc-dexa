@@ -252,7 +252,20 @@ def recent(
         else:
             detected_scan_type = base_type
 
-        exists    = bool(scan_date_iso and check_scan_exists(pid, scan_date_iso, detected_scan_type))
+        # check_scan_exists must match what's actually stored in bmd_scans.scan_type.
+        # The osteo upload path (collector_api's /upload handler) sends an explicit
+        # scan_type_override of 'osteo' — which takes absolute precedence over any
+        # MDB-derived refinement — so every real osteo row is stored with the literal
+        # 'osteo' label, never the spine_femur/dual_femur/spine_only/forearm sub-type
+        # detected here. Querying with that sub-type label matched zero rows, which
+        # made the "already uploaded" light always show off, even for scans that were
+        # genuinely uploaded. detected_scan_type is still returned below for display
+        # (the UI shows which regions were scanned) — only the existence check needs
+        # the normalized label.
+        stored_scan_type = 'osteo' if detected_scan_type in (
+            'spine_femur', 'dual_femur', 'spine_only', 'forearm', 'osteo',
+        ) else detected_scan_type
+        exists    = bool(scan_date_iso and check_scan_exists(pid, scan_date_iso, stored_scan_type))
         components = _derive_scan_components(sessions)
         out.append({
             **_jsonify(info),
