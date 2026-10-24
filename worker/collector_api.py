@@ -315,13 +315,23 @@ def xps_for_patient(patient_id: str):
     """Check which XPS files exist for a given patient, with detailed content labels and dates."""
     from pathlib import Path as _Path
     from collect_osteo import _classify_xps
+    from parse_xps import detect_xps_type
     import os
 
     files = find_xps_for_patient(patient_id)
     typed = []
     for f in files:
         try:
-            label = _classify_xps(f)
+            osteo_label = _classify_xps(f)
+            if osteo_label != 'unknown':
+                label = osteo_label
+            else:
+                xps_type = detect_xps_type(f)
+                label = (
+                    'total_body'
+                    if xps_type in ('totalbody_bone', 'totalbody_composition', 'totalbody_narrative')
+                    else 'unknown'
+                )
         except Exception:
             label = 'unknown'
 
@@ -540,7 +550,12 @@ def upload(patient_id: str, body: UploadBody):
                         xps_map['bone'] = p
                     elif t in ('totalbody_composition', 'totalbody_narrative') and 'composition' not in xps_map:
                         xps_map['composition'] = p
-                result = upload_totalbody_scan(patient_id, xps_map, progress_cb=_cb)
+                result = upload_totalbody_scan(
+                    patient_id,
+                    xps_map,
+                    progress_cb=_cb,
+                    scan_date=body.scan_date,
+                )
             else:
                 # Osteo: _classify_xps maps XPS files to image slots
                 # (spine / left_femur / right_femur / left_forearm / right_forearm / combined / dual_femur).

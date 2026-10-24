@@ -465,9 +465,9 @@ class MdbParser:
             return row.get('patient_id', '').strip()
         return ''
 
-    def find_totalbody_img_handle(self, pat_handle: str) -> str:
+    def find_totalbody_img_handle(self, pat_handle: str, scan_date=None) -> str:
         """
-        Return img_handle for the most recent total-body scan (scantype=10).
+        Return img_handle for the selected total-body scan (scantype=10). If scan_date is omitted, use the most recent one.
 
         The scanner may create TWO patient records sharing the same patient_id
         but with different pat_handle values.  This method looks up all
@@ -490,6 +490,20 @@ class MdbParser:
         ]
         if not cands:
             return ''
+
+        if scan_date:
+            if isinstance(scan_date, str):
+                scan_date = scan_date.strip().replace('Z', '+00:00')
+                try:
+                    scan_date = datetime.fromisoformat(scan_date)
+                except ValueError as exc:
+                    raise ValueError(f'Invalid scan_date: {scan_date!r}') from exc
+            target_day = scan_date.date() if isinstance(scan_date, datetime) else scan_date
+            day_cands = [e for e in cands
+                         if e.get('_acq_dt') and e['_acq_dt'].date() == target_day]
+            if day_cands:
+                cands = day_cands
+
         cands.sort(key=lambda e: e.get('_acq_dt') or datetime.min, reverse=True)
         return cands[0].get('img_handle', '')
 

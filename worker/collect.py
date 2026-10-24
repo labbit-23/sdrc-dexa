@@ -155,10 +155,11 @@ def find_xps_for_patient(patient_id: str,
 
 # ── MDB snapshot for one patient ──────────────────────────────────────────────
 
-def mdb_snapshot(patient_id: str, mdb_path: str = '') -> dict:
+def mdb_snapshot(patient_id: str, mdb_path: str = '', scan_date=None) -> dict:
     """
     Extract a JSON-serialisable snapshot of MDB data for one patient.
     Includes all patient rows, all exams, all composition, densitometry, and norm rows.
+    When scan_date is supplied, restrict the exam-linked data to that calendar day so an upload cannot accidentally reuse an older visit.
     Pass mdb_path to read from an alternative MDB (e.g. archive).
     """
     parser = MdbParser(mdb_path or config.MDB_PATH)
@@ -187,10 +188,23 @@ def mdb_snapshot(patient_id: str, mdb_path: str = '') -> dict:
     patients_out = {ph: _ser_patient(parser._parse_patient(parser._patients[ph]))
                     for ph in pat_handles}
 
+    exams = [e for e in parser._exams if e.get('pat_handle') in pat_handles]
+    if scan_date:
+        if isinstance(scan_date, str):
+            scan_date = scan_date.strip().replace('Z', '+00:00')
+            try:
+                scan_date = datetime.fromisoformat(scan_date)
+            except ValueError as exc:
+                raise ValueError(f'Invalid scan_date: {scan_date!r}') from exc
+        target_day = scan_date.date() if isinstance(scan_date, datetime) else scan_date
+        exams = [e for e in exams
+                 if e.get('_acq_dt') and e['_acq_dt'].date() == target_day]
+        if not exams:
+            raise ValueError(f'No MDB exam for patient {patient_id} on {target_day}')
+
     exams_out = [
         {k: _ser(v) for k, v in e.items()}
-        for e in parser._exams
-        if e.get('pat_handle') in pat_handles
+        for e in exams
     ]
 
     img_handles = {e['img_handle'] for e in exams_out if e.get('img_handle')}

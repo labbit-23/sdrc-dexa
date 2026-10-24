@@ -148,7 +148,7 @@ def _serial(obj):
     raise TypeError(f"Not JSON-serialisable: {type(obj)}")
 
 
-def build_raw_totalbody_json(mrn: str, xps_map: dict[str, str]) -> dict:
+def build_raw_totalbody_json(mrn: str, xps_map: dict[str, str], scan_date=None) -> dict:
     """
     Build the raw_json payload expected by computeReportData() in bmd-compute.js.
 
@@ -164,7 +164,7 @@ def build_raw_totalbody_json(mrn: str, xps_map: dict[str, str]) -> dict:
       }
     """
     log.info("Building MDB snapshot for MRN %s", mrn)
-    snap = mdb_snapshot(mrn)
+    snap = mdb_snapshot(mrn, scan_date=scan_date)
 
     # Pull bone density regions directly from MDB — primary source, always available
     mdb_bone_regions: dict = {}
@@ -173,7 +173,7 @@ def build_raw_totalbody_json(mrn: str, xps_map: dict[str, str]) -> dict:
         pat_handles = [ph for ph, row in parser._patients.items()
                        if row.get('patient_id', '').strip() == mrn]
         if pat_handles:
-            img_handle = parser.find_totalbody_img_handle(pat_handles[0])
+            img_handle = parser.find_totalbody_img_handle(pat_handles[0], scan_date=scan_date)
             if img_handle:
                 mdb_bone_regions = parser.get_totalbody_bone_regions(img_handle)
                 log.info("MDB bone regions: %d regions", len(mdb_bone_regions))
@@ -330,6 +330,7 @@ def upload_totalbody_scan(
     mrn: str,
     xps_map: dict[str, str],
     progress_cb=None,
+    scan_date=None,
 ) -> dict:
     """
     Full total-body upload for one patient:
@@ -344,7 +345,7 @@ def upload_totalbody_scan(
 
     # 1. MDB + XPS data
     notify(f"Reading MDB + XPS for MRN {mrn}…")
-    raw_data = build_raw_totalbody_json(mrn, xps_map)
+    raw_data = build_raw_totalbody_json(mrn, xps_map, scan_date=scan_date)
     raw_json_bytes = json.dumps(raw_data, indent=2, default=_serial).encode()
 
     # 2. Images
