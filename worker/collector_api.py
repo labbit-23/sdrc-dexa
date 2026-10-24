@@ -311,14 +311,20 @@ def db_mrns():
 
 
 @app.get('/xps/{patient_id}')
-def xps_for_patient(patient_id: str):
-    """Check which XPS files exist for a given patient, with detailed content labels and dates."""
+def xps_for_patient(patient_id: str, scan_date: Optional[str] = None):
+    """Check XPS files for a patient, restricted to the selected study date when supplied."""
     from pathlib import Path as _Path
     from collect_osteo import _classify_xps
     from parse_xps import detect_xps_type
     import os
 
-    files = find_xps_for_patient(patient_id)
+    target_date = None
+    if scan_date:
+        try:
+            target_date = datetime.fromisoformat(scan_date.strip().replace('Z', '+00:00'))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f'Invalid scan_date: {scan_date!r}') from exc
+    files = find_xps_for_patient(patient_id, target_date)
     typed = []
     for f in files:
         try:

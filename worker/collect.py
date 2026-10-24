@@ -144,6 +144,13 @@ def find_xps_for_patient(patient_id: str,
                    for f in watch.glob('*.xps')
                    if patient_id in f.stem]
 
+    # A selected MDB study must not inherit older XPS files for the same MRN.
+    # The console exports XPS files with the study-day mtime.
+    if scan_date and matches:
+        target_day = scan_date.date() if isinstance(scan_date, datetime) else scan_date
+        matches = [f for f in matches
+                   if datetime.fromtimestamp(Path(f).stat().st_mtime).date() == target_day]
+
     # If still none, try the most recent XPS from today
     if not matches and scan_date and scan_date.date() == datetime.now().date():
         all_xps = sorted(watch.glob('*.xps'), key=lambda f: f.stat().st_mtime)
