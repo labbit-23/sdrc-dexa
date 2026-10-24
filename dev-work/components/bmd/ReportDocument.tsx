@@ -210,7 +210,7 @@ function Page2({ data }: { data: ReportData }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <div style={{ fontSize: 30, fontWeight: 800,
                   color: comp.centile > 75 ? C.amber : C.greenLt }}>
-                  {comp.centile}
+                  {comp.centile}<span style={{ fontSize: 14, fontWeight: 700, marginLeft: 2, verticalAlign: 'baseline' }}>%</span>
                 </div>
                 <div style={{ fontSize: 8.5, color: C.gray, lineHeight: 1.5 }}>
                   Body fat is higher than {comp.centile}% of<br />

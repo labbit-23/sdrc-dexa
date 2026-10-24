@@ -245,7 +245,7 @@ def extract_tb_images(xps_map: dict[str, str], notify=None) -> dict[str, bytes]:
             except Exception as e:
                 log.warning("Colourise %s failed: %s", mode, e)
 
-        # Bone-mode silhouette for composite slot
+        # Grayscale composite silhouette; keep tissue false-color out of the report image.
         try:
             img = colorize_dexa_silhouette(body_sil, mode='bone')
             buf = io.BytesIO()
@@ -253,7 +253,7 @@ def extract_tb_images(xps_map: dict[str, str], notify=None) -> dict[str, bytes]:
             images['img_composite.png'] = buf.getvalue()
             _notify(f"  img_composite.png ({len(images['img_composite.png']) // 1024} KB)")
         except Exception as e:
-            log.warning("Bone-mode silhouette failed: %s", e)
+            log.warning("Grayscale composite generation failed: %s", e)
 
     if bmd_chart:
         try:
