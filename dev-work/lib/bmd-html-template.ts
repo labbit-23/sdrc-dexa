@@ -295,7 +295,7 @@ function agChart(comp: ReportData['composition'], gender: string, P: Pal) {
         <div><span ${s(`color:${C.pink}`)}>■</span> Fat: ${fatPct}% · ${(d.fat_g/1000).toFixed(2)} kg</div>
         <div><span ${s(`color:${C.cyan}`)}>■</span> Lean: ${d.lean_pct}% · ${(d.lean_g/1000).toFixed(2)} kg</div>
         <div ${s(`color:${d.lean_pct > 60 ? C.cyan : P.gray};font-weight:${d.lean_pct > 60 ? 600 : 400}`)}>
-          ${d.lean_pct > 60 ? 'Muscle-dominant ✓' : 'Mixed composition'}
+          ${d.lean_pct > 60 ? 'Regional lean tissue' : 'Regional composition'}
         </div>
       </div>
     </div>`).join('')}
@@ -569,7 +569,7 @@ function page2(data: ReportData, P: Pal, lh = false, pageNum = 2, totalPages = 5
     </div>
   </div>
   <div ${s(`flex-shrink:0;margin-top:8px;border-top:1px solid ${P.border};padding-top:6px;font-size:9px;color:${P.gray};line-height:1.6`)}>
-    * Android/Gynoid ratio = android fat% ÷ gynoid fat%, where fat% = fat mass ÷ total regional mass. High lower-body muscle mass <em>lowers</em> gynoid fat% (muscle displaces fat in the ratio denominator), which can <strong ${s(`color:${P.grayLt}`)}>elevate the A/G ratio</strong> even without true abdominal fat excess. Interpret with caution in lean, muscular individuals.
+    * Android/Gynoid ratio = android fat% ÷ gynoid fat%, where fat% = fat mass ÷ total regional mass. High lower-body muscle mass <em>lowers</em> gynoid fat% (lean tissue reduces the fat proportion in the denominator), which can <strong ${s(`color:${P.grayLt}`)}>elevate the A/G ratio</strong> even without true abdominal fat excess. Interpret with caution in lean, muscular individuals.
   </div>
 </div>`
 }
@@ -580,9 +580,9 @@ function page3(data: ReportData, P: Pal, lh = false, pageNum = 3, totalPages = 5
   const legsLean = comp.regions.Legs ? (comp.regions.Legs.lean_g / 1000).toFixed(2) : '—'
   const gynoidNote = comp.regions.Gynoid && comp.regions.Gynoid.lean_pct > 60 ? `
   <div ${s(`margin-top:10px;font-size:10px;color:${P.gray};line-height:1.6;border-top:1px solid ${P.border};padding-top:10px`)}>
-    <span ${s(`color:${C.cyan}`)}>Lean ${comp.regions.Gynoid.lean_pct}%</span> of gynoid region is skeletal muscle.
-    High lower-body lean mass <strong ${s(`color:${P.text}`)}>lowers gynoid fat%</strong>, which can raise the A/G ratio
-    — this may overstate central fat predominance in muscular individuals.
+    <span ${s(`color:${C.cyan}`)}>Regional lean tissue percentage is shown for context; it is not a direct skeletal-muscle measurement.</span>
+    Higher lower-body lean tissue <strong ${s(`color:${P.text}`)}>lowers gynoid fat%</strong>, which can raise the A/G ratio
+    — this may overstate central fat predominance when appendicular lean mass is high.
     Assess true abdominal fat from android fat% (${comp.android_fat_pct}%) directly.
   </div>` : ''
 
@@ -819,23 +819,23 @@ function summaryItems(
     body:`${comp.fat_pct}% — above the healthy range for ${male ? 'men' : 'women'} (ACE &gt;${normHi}%). Gradual reduction through consistent activity and dietary habits is recommended.` })
 
   if (comp.ag_ratio < 0.8) out.push({ status:'good', title:'Fat Distribution: Gynoid-Dominant',
-    body:`A/G ${comp.ag_ratio} — fat stored preferentially in the lower body. Favourable metabolic profile.` })
+    body:`A/G ${comp.ag_ratio} — fat is distributed more toward the lower body; interpret with total fat and regional fat percentages.` })
   else if (comp.ag_ratio < 1.0) out.push({ status:'info', title:'Fat Distribution: Mild Central Tendency',
-    body:`A/G ${comp.ag_ratio} — mild central fat predominance. Focus on reducing abdominal fat through aerobic activity. Monitor over time.` })
-  else if (calc.alm_available && calc.almi_rating === 'high') out.push({ status:'info', title:'Fat Distribution: Muscular Context',
-    body:`A/G ${comp.ag_ratio} — mild central pattern. With ALMI ${calc.almi} kg/m² (high muscle mass), the gynoid region is muscle-dominant (${comp.regions.Gynoid?.lean_pct ?? '—'}% lean). Monitor android fat% (${comp.android_fat_pct}%) as the meaningful indicator.` })
+    body:`A/G ${comp.ag_ratio} — mild central tendency; interpret with android fat% and monitor the trend over time.` })
+  else if (calc.alm_available && calc.almi_rating === 'high') out.push({ status:'info', title:'Fat Distribution: ALMI Context',
+    body:`A/G ${comp.ag_ratio} — android-predominant pattern. With ALMI ${calc.almi} kg/m² (high muscle mass), the gynoid region has a higher lean-tissue share (${comp.regions.Gynoid?.lean_pct ?? '—'}% lean). Monitor android fat% (${comp.android_fat_pct}%) as the direct regional measure.` })
   else out.push({ status:'warn', title:'Fat Distribution: Central Fat Predominance',
-    body:`A/G ${comp.ag_ratio} — android (abdominal) fat pattern. Lifestyle optimisation targeting abdominal fat is advised. Reassess after 3–6 months of intervention.` })
+    body:`A/G ${comp.ag_ratio} — android (abdominal) fat pattern; interpret with android fat% and monitor the trend over time.` })
 
   const almiLo = male ? 7.26 : 5.67
   if (!calc.alm_available) {
     out.push({ status:'info', title:'Muscle Mass (ALMI): Data Unavailable',
       body:`Regional MDB analysis was not stored for this scan. ALM and ALMI cannot be computed. Ensure regional body-composition data is saved at time of analysis for future scans.` })
-  } else if (calc.almi_rating === 'high') out.push({ status:'good', title:'Muscle Mass: Excellent',
-    body:`ALMI ${calc.almi} kg/m² — above-average appendicular lean mass. Well above the ${male ? 'male' : 'female'} sarcopenia threshold (${almiLo} kg/m²).` })
-  else if (calc.almi_rating === 'normal') out.push({ status:'good', title:'Muscle Mass: Normal',
-    body:`ALMI ${calc.almi} kg/m² — within normal reference range for ${male ? 'men' : 'women'}. Maintain with regular resistance training.` })
-  else out.push({ status:'warn', title:'Muscle Mass: Below Reference',
+  } else if (calc.almi_rating === 'high') out.push({ status:'good', title:'Muscle Context: ALMI',
+    body:`ALMI ${calc.almi} kg/m² — appendicular lean mass is above the reference range. This is a DEXA lean-tissue proxy, not a direct regional skeletal-muscle measure. ALMI is above the ${male ? 'male' : 'female'} sarcopenia threshold (${almiLo} kg/m²).` })
+  else if (calc.almi_rating === 'normal') out.push({ status:'good', title:'Muscle Context: ALMI',
+    body:`ALMI ${calc.almi} kg/m² — appendicular lean mass is within the reference range for ${male ? 'men' : 'women'}. This is a DEXA lean-tissue proxy; maintain with regular resistance training.` })
+  else out.push({ status:'warn', title:'Muscle Context: ALMI',
     body:`ALMI ${calc.almi} kg/m² — below the ${male ? 'male' : 'female'} sarcopenia threshold (${almiLo} kg/m²). Progressive resistance training and adequate protein (≥1.6 g/kg/day) recommended.` })
 
   if (calc.fat_risk === 'low') out.push({ status:'good', title:'Fat Mass Index: Normal',

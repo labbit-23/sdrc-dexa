@@ -513,7 +513,7 @@ function AGChart({ comp }: { comp: ReportData['composition'] }) {
                 <div><span style={{ color: C.pink }}>■</span> Fat: {fatPct}% · {(d.fat_g/1000).toFixed(2)} kg</div>
                 <div><span style={{ color: C.cyan }}>■</span> Lean: {d.lean_pct}% · {(d.lean_g/1000).toFixed(2)} kg</div>
                 <div style={{ color: d.lean_pct > 60 ? C.cyan : C.gray, fontWeight: d.lean_pct > 60 ? 600 : 400 }}>
-                  {d.lean_pct > 60 ? 'Muscle-dominant ✓' : 'Mixed composition'}
+                  {d.lean_pct > 60 ? 'Regional lean tissue' : 'Regional composition'}
                 </div>
               </div>
             </div>
@@ -736,8 +736,8 @@ function buildSummaryItems(
   } else if (calc.almi_rating === 'high') {
     // Elevated A/G but high muscle mass — downgrade to info, explain context
     items.push({ status: 'info',
-      title: 'Android/Gynoid: Context — Muscular',
-      body: `A/G ${comp.ag_ratio} — slightly central, but with an ALMI of ${calc.almi} kg/m² (high muscle mass), the gynoid region is muscle-dominant (${comp.regions.Gynoid?.lean_pct ?? '—'}% lean). Monitor android fat% (${comp.android_fat_pct}%) rather than the ratio alone.` })
+      title: 'Android/Gynoid: Context — ALMI',
+      body: `A/G ${comp.ag_ratio} — slightly central, but with an ALMI of ${calc.almi} kg/m² (high muscle mass), the gynoid region has a higher lean-tissue share (${comp.regions.Gynoid?.lean_pct ?? '—'}% lean). Monitor android fat% (${comp.android_fat_pct}%) rather than the ratio alone.` })
   } else {
     items.push({ status: 'alert',
       title: 'Android/Gynoid: Elevated',
@@ -746,14 +746,14 @@ function buildSummaryItems(
 
   // ALM / muscle
   if (calc.almi_rating === 'high') items.push({ status: 'good',
-    title: 'Muscle Mass: Excellent',
-    body: `ALMI ${calc.almi} kg/m² — above-average appendicular lean mass for your age. Strong musculoskeletal profile; well above sarcopenia threshold (7.26 kg/m²).` })
+    title: 'Muscle Context: ALMI',
+    body: `ALMI ${calc.almi} kg/m² — appendicular lean mass is above the reference range. This is a DEXA lean-tissue proxy, not a direct regional skeletal-muscle measurement.` })
   else if (calc.almi_rating === 'normal') items.push({ status: 'good',
-    title: 'Muscle Mass: Normal',
-    body: `ALMI ${calc.almi} kg/m² — within normal range. Maintain with regular resistance training (2–3×/week).` })
+    title: 'Muscle Context: ALMI',
+    body: `ALMI ${calc.almi} kg/m² — appendicular lean mass is within the reference range. This is a DEXA lean-tissue proxy.` })
   else items.push({ status: 'warn',
-    title: 'Muscle Mass: Low',
-    body: `ALMI ${calc.almi} kg/m² — below reference range (sarcopenia threshold 7.26 kg/m²). Resistance training and adequate protein intake (1.6 g/kg) recommended.` })
+    title: 'Muscle Context: ALMI',
+    body: `ALMI ${calc.almi} kg/m² — below the reference threshold (7.26 kg/m²). This is a DEXA lean-tissue proxy; consider strength and functional assessment.` })
 
   // FMI
   if (calc.fat_risk === 'low') items.push({ status: 'good',
